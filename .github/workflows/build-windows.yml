@@ -1,0 +1,61 @@
+name: 윈도우 설치 파일 만들기
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 필요한 것 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 실행 파일 만들기
+        run: pyinstaller --clean --noconfirm 공문정리함.spec
+
+      - name: 잘 만들어졌는지 확인
+        run: |
+          if (-not (Test-Path "dist\공문정리함.exe")) { throw "실행 파일이 만들어지지 않았습니다" }
+          Get-Item "dist\공문정리함.exe" | Format-List Name, Length
+
+      - name: 설치 프로그램 만들기
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          if (-not (Test-Path "dist\공문정리함-설치.exe")) { throw "설치 파일이 만들어지지 않았습니다" }
+
+      - name: 결과물 올리기
+        uses: actions/upload-artifact@v4
+        with:
+          name: gongmun-windows
+          path: |
+            dist/공문정리함.exe
+            dist/공문정리함-설치.exe
+            사용설명서.txt
+          retention-days: 30
+
+      - name: 태그를 올린 경우 릴리스로 게시
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/공문정리함.exe
+            dist/공문정리함-설치.exe
+          body: |
+            공문 정리함 ${{ github.ref_name }}
+
+            - `공문정리함-설치.exe` — 보통은 이걸 받으시면 됩니다. 설치하면 바탕화면 아이콘이 생깁니다.
+            - `공문정리함.exe` — 설치 없이 바로 실행하는 파일입니다. USB에 담아 쓰기 좋습니다.
+
+            파이썬을 따로 깔 필요는 없습니다.
