@@ -1,9 +1,11 @@
-; 공문 정리함 설치 프로그램
+﻿; 공문 정리함 설치 프로그램
 ; 관리자 권한 없이 사용자 폴더에 설치한다. 학교 컴퓨터에서 권한 없이도 깔린다.
 ;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
 #define AppName "공문 정리함"
-#define AppVersion "1.0.0"
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
 #define AppExe "공문정리함.exe"
 
 [Setup]
@@ -24,9 +26,6 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
-
-[Languages]
-Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "바탕화면에 아이콘 만들기"; GroupDescription: "추가 설정:"

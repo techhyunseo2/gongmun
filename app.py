@@ -36,6 +36,14 @@ BASE_DIR = _base_dir()
 HOME_DIR = Path.home() / ".gongmun"
 CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
+# 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
+# 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
+VERSION = "1.0.0"
+
+# 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
+# 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
+UPDATE_REPO = "techhyunseo2/gongmun"
+
 PORT = 8777
 PORT_TRIES = 12
 

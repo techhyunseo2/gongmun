@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import subprocess
 import sys
 import threading
@@ -25,10 +26,11 @@ from tkinter import font as tkfont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app import (DB_PATH, PORT, already_running, load_config, open_in_os,  # noqa: E402
+from app import (DB_PATH, PORT, VERSION, already_running, load_config, open_in_os,  # noqa: E402
                  resolve_folder, save_config, start_server)
 from classify import CATEGORIES, days_left  # noqa: E402
 from store import Store  # noqa: E402
+import updater  # noqa: E402
 
 PAPER = "#DDE1DC"
 CARD = "#FBFBF8"
@@ -70,6 +72,8 @@ class Widget:
 
         self.refresh(scan=True)
         self._tick()
+        # 같은 학교 여러 대가 한꺼번에 몰리지 않도록 조금 흩어 놓는다
+        self.root.after(random.randint(5, 90) * 1000, self._maybe_check_update)
 
     # ------------------------------------------------------------- 준비
 
@@ -327,12 +331,71 @@ class Widget:
         save_config(self.config)
         self.root.attributes("-alpha", value)
 
+    def check_update(self, quiet: bool = True) -> None:
+        """새 버전이 있는지 알아본다. quiet면 없을 때 아무 말도 하지 않는다."""
+        threading.Thread(target=self._check_update_worker, args=(quiet,), daemon=True).start()
+
+    def _check_update_worker(self, quiet: bool) -> None:
+        try:
+            found = updater.check()
+        except updater.UpdateError as exc:
+            if not quiet:
+                self.root.after(0, lambda: self._update_message(str(exc)))
+            return
+        self.config["update_checked"] = date.today().isoformat()
+        save_config(self.config)
+        if found:
+            self.root.after(0, lambda: self._offer_update(found))
+        elif not quiet:
+            self.root.after(0, lambda: self._update_message("최신 버전을 쓰고 계십니다."))
+
+    def _update_message(self, text: str) -> None:
+        from tkinter import messagebox
+        messagebox.showinfo("공문 정리함", text)
+
+    def _offer_update(self, found: dict) -> None:
+        from tkinter import messagebox
+        notes = f"\n\n{found['notes']}" if found.get("notes") else ""
+        agreed = messagebox.askyesno(
+            "공문 정리함",
+            f"새 버전 {found['version']} 이 나왔습니다.\n"
+            f"지금 쓰시는 것은 {VERSION} 입니다.{notes}\n\n지금 받아서 바꿀까요?",
+        )
+        if not agreed:
+            return
+        self.summary.config(text="새 버전을 받는 중", fg=SLATE)
+        threading.Thread(target=self._apply_update, args=(found,), daemon=True).start()
+
+    def _apply_update(self, found: dict) -> None:
+        try:
+            updater.apply(found["url"])
+        except updater.UpdateError as exc:
+            self.root.after(0, lambda: self._update_message(f"업데이트하지 못했습니다.\n\n{exc}"))
+            self.root.after(0, self.draw)
+            return
+        self.root.after(0, lambda: self._finish_update(found["version"]))
+
+    def _finish_update(self, version: str) -> None:
+        from tkinter import messagebox
+        self.config["widget_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
+        save_config(self.config)
+        messagebox.showinfo("공문 정리함", f"{version} 로 바꿨습니다.\n확인을 누르면 새로 시작합니다.")
+        updater.restart()
+
+    def _maybe_check_update(self) -> None:
+        """하루에 한 번만 조용히 확인한다."""
+        if self.config.get("update_checked") == date.today().isoformat():
+            return
+        self.check_update(quiet=True)
+
     def _tick(self):
         self.root.after(REFRESH_MINUTES * 60_000, self._on_tick)
 
     def _on_tick(self):
         self.refresh(scan=True)
         self._tick()
+        # 같은 학교 여러 대가 한꺼번에 몰리지 않도록 조금 흩어 놓는다
+        self.root.after(random.randint(5, 90) * 1000, self._maybe_check_update)
 
     def quit(self):
         self.config["widget_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
@@ -471,6 +534,7 @@ def _install_error_handler() -> None:
 
 def main():
     _install_error_handler()
+    updater.clean_leftovers()
     parser = argparse.ArgumentParser(description="공문 정리함 위젯")
     parser.add_argument("--folder", help="공문을 모아 두는 폴더")
     parser.add_argument("--port", type=int, default=PORT)
