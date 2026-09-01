@@ -80,6 +80,12 @@ def _sentences(text: str) -> list[str]:
 # 다른 공문을 인용하는 줄. 여기 붙은 날짜는 내 일정이 아니다.
 _REFERENCE_LINE = re.compile(r"^\s*\d?\s*\.?\s*관련\s*[:：]|관련\s*근거|^\s*근\s*거\s*[:：]")
 
+# 공문 아래쪽 결재선과 시행·접수 줄. 여기 날짜는 문서를 주고받은 날이지
+# 내가 지켜야 할 날이 아니다.
+_ROUTING_LINE = re.compile(
+    r"시\s*행\s+\S+\s*-\s*\d+|접\s*수\s+\S+\s*-\s*\d+|협조자|전결|대결|"
+    r"우\s*\d{5}|전화\s*\d{2,4}\s*-|전송\s*\d{2,4}\s*-|[\w.]+@[\w.]+|https?://")
+
 
 def find_dates(text: str, base: date | None = None) -> list[tuple[list[date], str]]:
     """본문을 문장 단위로 훑어 (그 문장에 나온 날짜들, 문장) 목록을 만든다."""
@@ -87,7 +93,7 @@ def find_dates(text: str, base: date | None = None) -> list[tuple[list[date], st
     found: list[tuple[list[date], str]] = []
 
     for sentence in _sentences(text):
-        if _REFERENCE_LINE.search(sentence):
+        if _REFERENCE_LINE.search(sentence) or _ROUTING_LINE.search(sentence):
             continue
         dates: list[date] = []
         for pattern in _DATE_PATTERNS:
@@ -157,13 +163,33 @@ _ORG_SUFFIX = re.compile(
     r"시청|구청|군청|위원회|본부|센터|경찰서|소방서|보건소)\s*$")
 
 
+_LABEL_ONLY = re.compile(r"^제\s*목\s*[:：]?$")
+_ITEM_START = re.compile(r"^(\d+\s*\.|[가-힣]\s*\.|[①-⑮]|[ⅠⅡⅢⅣⅤ])\s")
+
+
 def guess_title(text: str, fallback: str) -> str:
-    """본문 머리에서 제목 줄을 찾는다. 없으면 파일명을 쓴다."""
-    for line in text.split("\n")[:40]:
-        line = line.strip()
-        stripped = re.sub(r"^제\s*목\s*[:：]?\s*", "", line)
+    """본문 머리에서 제목을 찾는다. 없으면 파일명을 쓴다."""
+    lines = [line.strip() for line in text.split("\n")]
+
+    # "제목: 내용" 처럼 한 줄에 같이 있는 경우
+    for line in lines[:40]:
+        stripped = re.sub(r"^제\s*목\s*[:：]?\s+", "", line)
         if stripped != line and stripped:
             return stripped[:120]
+
+    # PDF는 "제목" 이 라벨만 한 줄을 차지하고 내용이 다음 줄부터 온다.
+    # 제목이 길면 두세 줄로 접혀 있으므로 항목 번호가 나올 때까지 이어 붙인다.
+    for index, line in enumerate(lines[:40]):
+        if not _LABEL_ONLY.match(line):
+            continue
+        collected: list[str] = []
+        for following in lines[index + 1:index + 6]:
+            if not following or _ITEM_START.match(following):
+                break
+            collected.append(following)
+        if collected:
+            return re.sub(r"\s+", " ", " ".join(collected))[:120]
+
     for line in text.split("\n")[:15]:
         line = line.strip(" .·-")
         if not 6 <= len(line) <= 80:
@@ -188,11 +214,20 @@ def guess_sender(text: str) -> str:
 
 
 def guess_doc_number(text: str) -> str:
+    """보낸 쪽 문서번호. 공문 아래 '시행 OO과-12345' 가 가장 정확하다."""
+    match = re.search(r"시\s*행\s+([가-힣A-Za-z]{2,15}\s*-\s*\d{3,7})", text)
+    if match:
+        return re.sub(r"\s+", "", match.group(1))[:40]
     match = re.search(r"(?:문서번호|문서\s*번호)\s*[:：]?\s*([\w가-힣\-]+\s*-?\s*\d+)", text)
     if match:
-        return match.group(1).strip()[:40]
-    match = re.search(r"\(([가-힣]{2,10}과\s*-\s*\d{3,7})\)", text)
-    return match.group(1).strip()[:40] if match else ""
+        return re.sub(r"\s+", "", match.group(1))[:40]
+    return ""
+
+
+def guess_receipt_number(text: str) -> str:
+    """우리 학교 접수번호. 본문과 첨부를 하나로 묶는 열쇠가 된다."""
+    match = re.search(r"접\s*수\s+([가-힣A-Za-z]{2,15}\s*-\s*\d{2,7})", text)
+    return re.sub(r"\s+", "", match.group(1))[:40] if match else ""
 
 
 def classify(title: str, body: str, has_deadline: bool, has_future_date: bool) -> tuple[str, dict[str, int]]:
@@ -245,6 +280,7 @@ def analyze(title_fallback: str, body: str, base: date | None = None) -> dict:
         "title": title,
         "sender": guess_sender(body),
         "doc_number": guess_doc_number(body),
+        "receipt_number": guess_receipt_number(body),
         "category": category,
         "confidence": confidence,
         "deadline": deadline.isoformat() if deadline else None,

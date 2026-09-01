@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from classify import CATEGORIES, CATEGORY_ORDER, days_left  # noqa: E402
 from store import Store  # noqa: E402
+import organize  # noqa: E402
 
 def _base_dir() -> Path:
     """exe로 묶이면 파일들이 임시 폴더에 풀린다. 그때는 그쪽을 봐야 한다."""
@@ -38,7 +39,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -242,6 +243,20 @@ class Handler(BaseHTTPRequestHandler):
             open_in_os(target)
             return self._json({"ok": True})
 
+        if route == "/api/organize":
+            preview = query.get("preview", ["0"])[0] == "1"
+            report = organize.organize(self.folder, self._titles(), dry_run=preview)
+            if not preview:
+                self.store.scan(self.folder)
+            state = self._state()
+            state["organized"] = report
+            return self._json(state)
+
+        if route == "/api/archive":
+            preview = query.get("preview", ["0"])[0] == "1"
+            state = self._archive(preview)
+            return self._json(state)
+
         if route == "/api/open-folder":
             open_in_os(self.folder)
             return self._json({"ok": True})
@@ -262,7 +277,9 @@ class Handler(BaseHTTPRequestHandler):
         doc_id = payload.get("id", "")
 
         if route == "/api/done":
-            self.store.set_done(doc_id, bool(payload.get("done")))
+            done = bool(payload.get("done"))
+            for member in payload.get("members") or [doc_id]:
+                self.store.set_done(member, done)
         elif route == "/api/category":
             category = payload.get("category")
             if category not in CATEGORIES:
@@ -286,11 +303,52 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._json(self._state())
 
+    def _titles(self) -> dict[str, str]:
+        """접수번호별 대표 제목. 본문에서 읽은 것을 우선한다."""
+        titles: dict[str, str] = {}
+        for group in fold_groups(self.store.all_docs()):
+            key = group.get("receipt_number") or group.get("group_key") or ""
+            if key and group.get("title"):
+                titles[key] = group["title"]
+        return titles
+
+    def _archive(self, preview: bool) -> dict:
+        """끝난 공문을 마감 월 폴더로 옮긴다."""
+        base, inbox = organize.resolve_workspace(self.folder)
+        entries, skipped = [], 0
+        for group in fold_groups(self.store.all_docs()):
+            if not group["done"] or group.get("archived"):
+                continue
+            month = _month_of(group)
+            if month is None:
+                skipped += 1
+                continue
+            entries.append({
+                "title": group.get("title") or group["filename"],
+                "month": month,
+                "receipt": group.get("receipt_number") or "",
+                "paths": group["paths"],
+                "ids": [m["id"] for m in group["members"]],
+            })
+
+        report = organize.archive(base, inbox, entries, dry_run=preview)
+        if not preview:
+            moved = report.get("relocated", {})
+            for entry in entries:
+                for member_id, old in zip(entry["ids"], entry["paths"]):
+                    if old in moved:
+                        self.store.relocate(member_id, moved[old], f"{entry['month']}월")
+        report["no_date"] = skipped
+        report["base"] = str(base)
+        state = self._state()
+        state["archived_report"] = report
+        return state
+
     # -------------------------------------------------------------- 상태
 
     def _state(self) -> dict:
         today = date.today()
-        docs = self.store.all_docs()
+        docs = fold_groups(self.store.all_docs())
         for doc in docs:
             doc["days_left"] = days_left(doc.get("deadline"), today)
         docs.sort(key=_sort_key)
@@ -299,8 +357,12 @@ class Handler(BaseHTTPRequestHandler):
             if not doc["done"]:
                 counts[doc["category"]] = counts.get(doc["category"], 0) + 1
         urgent = [d for d in docs if not d["done"] and d["days_left"] is not None and d["days_left"] <= 3]
+        base, inbox = organize.resolve_workspace(self.folder)
         return {
             "folder": str(self.folder),
+            "base": str(base),
+            "inbox": str(inbox),
+            "months": sorted(organize.month_dirs(base)),
             "today": today.isoformat(),
             "categories": CATEGORIES,
             "order": CATEGORY_ORDER,
@@ -308,6 +370,68 @@ class Handler(BaseHTTPRequestHandler):
             "urgent": len(urgent),
             "docs": docs,
         }
+
+
+def fold_groups(docs: list[dict]) -> list[dict]:
+    """같은 접수번호끼리 하나로 묶는다.
+
+    본문이 대표가 되고 첨부는 딸린 문서로 붙는다. 기한과 날짜는 묶음 전체에서
+    모으는데, 첨부의 제출 서식에만 기한이 적힌 경우가 흔하기 때문이다.
+    """
+    buckets: dict[str, list[dict]] = {}
+    for doc in docs:
+        buckets.setdefault(doc.get("group_key") or doc["id"], []).append(doc)
+
+    folded: list[dict] = []
+    for key, members in buckets.items():
+        members.sort(key=lambda d: (d.get("role") != organize.ROLE_BODY, d["filename"]))
+        lead = _pick_lead(members)
+        entry = dict(lead)
+        entry["group_key"] = key
+        entry["members"] = [
+            {"id": m["id"], "filename": m["filename"], "role": m.get("role") or "",
+             "error": m.get("error") or "", "path": m.get("path") or ""}
+            for m in members
+        ]
+        entry["attachments"] = sum(1 for m in members
+                                   if m.get("role") == organize.ROLE_ATTACH)
+        entry["paths"] = [m["path"] for m in members]
+        entry["archived"] = next((m.get("archived") for m in members if m.get("archived")), "")
+
+        deadlines = sorted({m["deadline"] for m in members if m.get("deadline")})
+        if deadlines:
+            entry["deadline"] = deadlines[0]
+            if not entry.get("deadline_context"):
+                source = next(m for m in members if m["deadline"] == deadlines[0])
+                entry["deadline_context"] = source.get("deadline_context") or ""
+        events = sorted({m["event_date"] for m in members if m.get("event_date")})
+        entry["event_date"] = events[0] if events else None
+        entry["all_dates"] = sorted({d for m in members for d in (m.get("all_dates") or [])})
+        entry["done"] = all(m["done"] for m in members)
+        folded.append(entry)
+    return folded
+
+
+def _pick_lead(members: list[dict]) -> dict:
+    """묶음을 대표할 문서. 본문이 있으면 본문, 없으면 판단이 가장 또렷한 것."""
+    for member in members:
+        if member.get("role") == organize.ROLE_BODY:
+            return member
+    ranking = {"높음": 0, "보통": 1, "낮음": 2}
+    return min(members, key=lambda m: (ranking.get(m.get("confidence"), 3),
+                                       not m.get("deadline")))
+
+
+def _month_of(group: dict) -> int | None:
+    """어느 달 폴더로 보낼지 정한다. 마감 → 행사일 → 파일 날짜 순으로 본다."""
+    for key in ("deadline", "event_date", "modified"):
+        value = group.get(key)
+        if value:
+            try:
+                return int(str(value).split("-")[1])
+            except (IndexError, ValueError):
+                continue
+    return None
 
 
 def _sort_key(doc: dict):

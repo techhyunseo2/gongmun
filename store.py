@@ -14,6 +14,7 @@ from pathlib import Path
 
 from classify import analyze
 from extract import SUPPORTED, ExtractError, extract_rich
+from organize import ROLE_BODY, group_key
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs (
@@ -35,6 +36,10 @@ CREATE TABLE IF NOT EXISTS docs (
     summary         TEXT,
     body            TEXT,
     body_html       TEXT DEFAULT '',
+    group_key       TEXT DEFAULT '',
+    role            TEXT DEFAULT '',
+    receipt_number  TEXT DEFAULT '',
+    archived        TEXT DEFAULT '',
     done            INTEGER DEFAULT 0,
     memo            TEXT DEFAULT '',
     error           TEXT DEFAULT ''
@@ -55,7 +60,11 @@ class Store:
     def _migrate(self) -> None:
         """예전 버전에서 만든 파일에 새 칸을 붙인다."""
         existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(docs)")}
-        for column, definition in (("body_html", "TEXT DEFAULT ''"),):
+        for column, definition in (("body_html", "TEXT DEFAULT ''"),
+                                   ("group_key", "TEXT DEFAULT ''"),
+                                   ("role", "TEXT DEFAULT ''"),
+                                   ("receipt_number", "TEXT DEFAULT ''"),
+                                   ("archived", "TEXT DEFAULT ''")):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {definition}")
 
@@ -87,11 +96,13 @@ class Store:
                 body, body_html, error = "", "", str(exc)[:200]
                 result = {
                     "title": path.stem, "sender": "", "doc_number": "",
-                    "category": "other", "confidence": "낮음", "deadline": None,
-                    "deadline_context": "", "event_date": None, "all_dates": [],
-                    "summary": "",
+                    "receipt_number": "", "category": "other", "confidence": "낮음",
+                    "deadline": None, "deadline_context": "", "event_date": None,
+                    "all_dates": [], "summary": "",
                 }
                 failed += 1
+            result["group_key"], result["role"] = group_key(
+                path, folder, result.get("receipt_number", ""))
             self._upsert(doc_id, path, result, body, body_html, error)
             if not error:
                 added += 1
@@ -106,8 +117,9 @@ class Store:
         self.conn.execute(
             """INSERT INTO docs (id, path, filename, modified, scanned_at, title, sender,
                                  doc_number, category, confidence, deadline, deadline_context,
-                                 event_date, all_dates, summary, body, body_html, error)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                 event_date, all_dates, summary, body, body_html,
+                                 group_key, role, receipt_number, error)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  path=excluded.path, filename=excluded.filename, scanned_at=excluded.scanned_at,
                  title=excluded.title, sender=excluded.sender, doc_number=excluded.doc_number,
@@ -115,7 +127,9 @@ class Store:
                  deadline=excluded.deadline, deadline_context=excluded.deadline_context,
                  event_date=excluded.event_date, all_dates=excluded.all_dates,
                  summary=excluded.summary, body=excluded.body,
-                 body_html=excluded.body_html, error=excluded.error""",
+                 body_html=excluded.body_html, group_key=excluded.group_key,
+                 role=excluded.role, receipt_number=excluded.receipt_number,
+                 error=excluded.error""",
             (
                 doc_id, str(path), path.name,
                 date.fromtimestamp(stat.st_mtime).isoformat(),
@@ -124,11 +138,18 @@ class Store:
                 result["category"], result["confidence"], result["deadline"],
                 result["deadline_context"], result["event_date"],
                 json.dumps(result["all_dates"], ensure_ascii=False),
-                result["summary"], body[:20000], body_html[:120000], error,
+                result["summary"], body[:20000], body_html[:120000],
+                result.get("group_key", ""), result.get("role", ""),
+                result.get("receipt_number", ""), error,
             ),
         )
 
     def _forget_missing(self, seen: set[str]) -> int:
+        """폴더에서 사라진 기록만 지운다.
+
+        월별 폴더로 옮긴 문서는 인박스를 훑을 때 나오지 않지만 파일은
+        그대로 있으므로 남는다.
+        """
         rows = self.conn.execute("SELECT id, path FROM docs").fetchall()
         gone = [r["id"] for r in rows if r["id"] not in seen and not Path(r["path"]).exists()]
         for doc_id in gone:
@@ -169,6 +190,13 @@ class Store:
 
     def set_memo(self, doc_id: str, memo: str) -> None:
         self.conn.execute("UPDATE docs SET memo=? WHERE id=?", (memo[:500], doc_id))
+        self.conn.commit()
+
+    def relocate(self, doc_id: str, new_path: str, archived: str) -> None:
+        """파일을 옮긴 뒤 기록의 위치를 따라가게 한다."""
+        path = Path(new_path)
+        self.conn.execute("UPDATE docs SET path=?, filename=?, archived=? WHERE id=?",
+                          (str(path), path.name, archived, doc_id))
         self.conn.commit()
 
     def set_deadline(self, doc_id: str, deadline: str | None) -> None:
