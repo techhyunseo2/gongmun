@@ -50,9 +50,10 @@ REFRESH_MINUTES = 10
 
 
 class Widget:
-    def __init__(self, store: Store, folder: Path, port: int):
+    def __init__(self, store: Store, folder: Path, port: int, base: Path | None = None):
         self.store = store
         self.folder = folder
+        self.base = base or folder.parent
         self.port = port
         self.config = load_config()
         self.collapsed = False
@@ -105,7 +106,15 @@ class Widget:
         self.btn_fold.pack(side="right")
 
         self.summary = tk.Label(outer, text="읽는 중", font=self.f_head, bg=PAPER, fg=SOFT, anchor="w")
-        self.summary.pack(fill="x", padx=12, pady=(0, 8))
+        self.summary.pack(fill="x", padx=12, pady=(0, 1))
+
+        self.folderline = tk.Label(outer, font=self.f_small, bg=PAPER, fg=SOFT,
+                                   anchor="w", cursor="hand2")
+        self.folderline.pack(fill="x", padx=12, pady=(0, 8))
+        self.folderline.bind("<Button-1>", lambda e: self.show_folder())
+        self.folderline.bind("<Enter>", lambda e: self.folderline.config(fg=INK))
+        self.folderline.bind("<Leave>", lambda e: self.folderline.config(fg=SOFT))
+        self._paint_folder()
 
         self.body = tk.Frame(outer, bg=PAPER)
         self.body.pack(fill="both", expand=True)
@@ -121,6 +130,49 @@ class Widget:
         self.btn_scan.pack(side="left", padx=(6, 0))
         self.stamp = tk.Label(foot, text="", font=self.f_small, bg=PAPER, fg=SOFT)
         self.stamp.pack(side="right")
+
+    def _paint_folder(self):
+        parts = self.folder.parts
+        short = " › ".join(parts[-2:]) if len(parts) >= 2 else str(self.folder)
+        self.folderline.config(text="폴더  " + _shorten(short, 32))
+
+    def show_folder(self):
+        """지금 읽고 있는 폴더를 보여 주고, 원하면 바꾸게 한다."""
+        window = tk.Toplevel(self.root)
+        window.title("공문 폴더")
+        window.configure(bg=PAPER)
+        window.resizable(False, False)
+        window.transient(self.root)
+
+        frame = tk.Frame(window, bg=PAPER)
+        frame.pack(fill="both", expand=True, padx=18, pady=16)
+
+        for label, value in (("공문을 읽는 곳", self.folder), ("업무 폴더", self.base)):
+            tk.Label(frame, text=label, font=self.f_small, bg=PAPER, fg=SOFT,
+                     anchor="w").pack(fill="x", pady=(6, 2))
+            box = tk.Text(frame, height=2, width=46, font=self.f_small, wrap="char",
+                          bg=CARD, fg=INK, relief="flat", highlightthickness=1,
+                          highlightbackground=RULE, padx=8, pady=6)
+            box.insert("1.0", str(value))
+            box.config(state="disabled")
+            box.pack(fill="x")
+
+        tk.Label(frame, text="월별 폴더는 파일을 옮겨 넣기만 하고 내용은 읽지 않습니다.",
+                 font=self.f_small, bg=PAPER, fg=SOFT, anchor="w",
+                 wraplength=330, justify="left").pack(fill="x", pady=(10, 0))
+
+        buttons = tk.Frame(frame, bg=PAPER)
+        buttons.pack(fill="x", pady=(14, 0))
+        for text, command in (("폴더 열기", lambda: open_in_os(self.folder)),
+                              ("폴더 바꾸기", lambda: (window.destroy(), self._change_folder())),
+                              ("닫기", window.destroy)):
+            self._foot_button(buttons, text, lambda e=None, c=command: c()).pack(side="left", padx=(0, 6))
+
+        window.update_idletasks()
+        x = self.root.winfo_x() + 20
+        y = self.root.winfo_y() + 60
+        window.geometry(f"+{x}+{y}")
+        window.grab_set()
 
     def _foot_button(self, parent, text, command):
         label = tk.Label(parent, text=text, font=self.f_small, bg=CARD, fg=INK,
@@ -294,6 +346,7 @@ class Widget:
         for value, label in ((1.0, "선명하게"), (0.92, "조금 투명하게"), (0.8, "많이 투명하게")):
             menu.add_command(label=label, command=lambda v=value: self._set_opacity(v))
         menu.add_separator()
+        menu.add_command(label="공문 폴더 확인", command=self.show_folder)
         menu.add_command(label="공문 폴더 열기", command=lambda: open_in_os(self.folder))
         menu.add_command(label="공문 폴더 바꾸기", command=self._change_folder)
         menu.add_command(label="전체 화면 열기", command=self.open_browser)
@@ -314,12 +367,13 @@ class Widget:
                                          initialdir=str(self.folder))
         if not chosen:
             return
-        _base, inbox = resolve_inbox(Path(chosen))
-        self.folder = inbox
+        base, inbox = resolve_inbox(Path(chosen))
+        self.base, self.folder = base, inbox
         self.config["folder"] = str(inbox)
         save_config(self.config)
         from app import Handler
-        Handler.folder = self.folder
+        Handler.folder, Handler.base = inbox, base
+        self._paint_folder()
         self.refresh(scan=True)
 
     def _toggle_top(self):
@@ -560,7 +614,7 @@ def main():
     store = Store(DB_PATH)
     _server, port = start_server(store, folder, args.port, base=base)
 
-    widget = Widget(store, folder, port)
+    widget = Widget(store, folder, port, base=base)
     if is_first_run:
         widget.root.after(700, lambda: first_run_guide(folder))
     widget.run()
