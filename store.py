@@ -107,7 +107,7 @@ class Store:
             if not error:
                 added += 1
 
-        removed = self._forget_missing(seen)
+        removed = self._forget_missing(seen, folder)
         self.conn.commit()
         return {"added": added, "skipped": skipped, "failed": failed, "removed": removed}
 
@@ -144,14 +144,26 @@ class Store:
             ),
         )
 
-    def _forget_missing(self, seen: set[str]) -> int:
-        """폴더에서 사라진 기록만 지운다.
+    def _forget_missing(self, seen: set[str], folder: Path) -> int:
+        """이번에 훑은 폴더 밖의 기록을 정리한다.
 
-        월별 폴더로 옮긴 문서는 인박스를 훑을 때 나오지 않지만 파일은
-        그대로 있으므로 남는다.
+        월별 폴더로 옮긴 문서는 정리했다는 표시가 있으므로 남긴다.
+        그 표시가 없는데 공문 폴더 밖에 있는 것은 실수로 읽어들인
+        남의 파일이므로 기록에서 지운다. 파일 자체는 건드리지 않는다.
         """
-        rows = self.conn.execute("SELECT id, path FROM docs").fetchall()
-        gone = [r["id"] for r in rows if r["id"] not in seen and not Path(r["path"]).exists()]
+        rows = self.conn.execute("SELECT id, path, archived FROM docs").fetchall()
+        gone: list[str] = []
+        for row in rows:
+            if row["id"] in seen:
+                continue
+            path = Path(row["path"])
+            if not path.exists():
+                gone.append(row["id"])
+                continue
+            if row["archived"]:              # 우리가 옮긴 것은 그대로 둔다
+                continue
+            if not _is_inside(path, folder):
+                gone.append(row["id"])
         for doc_id in gone:
             self.conn.execute("DELETE FROM docs WHERE id=?", (doc_id,))
         return len(gone)
@@ -202,6 +214,14 @@ class Store:
     def set_deadline(self, doc_id: str, deadline: str | None) -> None:
         self.conn.execute("UPDATE docs SET deadline=? WHERE id=?", (deadline or None, doc_id))
         self.conn.commit()
+
+
+def _is_inside(path: Path, folder: Path) -> bool:
+    try:
+        path.resolve().relative_to(folder.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def _file_id(path: Path) -> str:

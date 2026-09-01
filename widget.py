@@ -26,8 +26,8 @@ from tkinter import font as tkfont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app import (DB_PATH, PORT, VERSION, already_running, load_config, open_in_os,  # noqa: E402
-                 resolve_folder, save_config, start_server)
+from app import (DB_PATH, PORT, VERSION, already_running, fold_groups, load_config, open_in_os,  # noqa: E402
+                 resolve_folder, resolve_inbox, save_config, start_server)
 from classify import CATEGORIES, days_left  # noqa: E402
 from store import Store  # noqa: E402
 import updater  # noqa: E402
@@ -202,7 +202,8 @@ class Widget:
 
     def draw(self):
         today = date.today()
-        docs = [d for d in self.store.all_docs() if not d["done"]]
+        # 대시보드와 같은 방식으로 센다. 본문과 첨부는 공문 하나로 묶인다.
+        docs = [d for d in fold_groups(self.store.all_docs()) if not d["done"]]
         for doc in docs:
             doc["left"] = days_left(doc.get("deadline"), today)
         docs.sort(key=_widget_sort)
@@ -313,8 +314,9 @@ class Widget:
                                          initialdir=str(self.folder))
         if not chosen:
             return
-        self.folder = Path(chosen)
-        self.config["folder"] = str(self.folder)
+        _base, inbox = resolve_inbox(Path(chosen))
+        self.folder = inbox
+        self.config["folder"] = str(inbox)
         save_config(self.config)
         from app import Handler
         Handler.folder = self.folder
@@ -553,9 +555,10 @@ def main():
         root.destroy()
         return
 
-    folder = resolve_folder(args.folder, ask=is_first_run)
+    chosen = resolve_folder(args.folder, ask=is_first_run)
+    base, folder = resolve_inbox(chosen)
     store = Store(DB_PATH)
-    _server, port = start_server(store, folder, args.port)
+    _server, port = start_server(store, folder, args.port, base=base)
 
     widget = Widget(store, folder, port)
     if is_first_run:

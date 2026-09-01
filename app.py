@@ -39,7 +39,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -63,6 +63,20 @@ def load_config() -> dict:
 def save_config(config: dict) -> None:
     HOME_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def resolve_inbox(chosen: Path) -> tuple[Path, Path]:
+    """(업무 루트, 공문 인박스)를 정하고 인박스가 없으면 만든다.
+
+    월별 폴더에는 공문 말고도 제출 자료나 개인정보가 든 파일이 섞여 있다.
+    그래서 프로그램이 들여다보는 곳은 오직 공문 인박스 한 곳뿐이다.
+    """
+    base, inbox = organize.resolve_workspace(chosen)
+    try:
+        inbox.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return chosen.parent, chosen
+    return base, inbox
 
 
 def resolve_folder(cli_folder: str | None, ask: bool = False) -> Path:
@@ -178,7 +192,8 @@ def build_ics(docs: list[dict]) -> str:
 
 class Handler(BaseHTTPRequestHandler):
     store: Store
-    folder: Path
+    folder: Path          # 공문 인박스 — 여기만 읽는다
+    base: Path            # 업무 루트 — 월별 폴더를 만드는 곳
 
     def log_message(self, *args):  # 콘솔을 조용하게
         pass
@@ -293,11 +308,12 @@ class Handler(BaseHTTPRequestHandler):
             folder = Path(unquote(payload.get("folder", ""))).expanduser()
             if not folder.is_dir():
                 return self._json({"error": "그런 폴더가 없습니다."}, 400)
+            base, inbox = resolve_inbox(folder.resolve())
             config = load_config()
-            config["folder"] = str(folder.resolve())
+            config["folder"] = str(inbox)
             save_config(config)
-            Handler.folder = folder.resolve()
-            self.store.scan(Handler.folder)
+            Handler.base, Handler.folder = base, inbox
+            self.store.scan(inbox)
         else:
             return self._json({"error": "알 수 없는 요청입니다."}, 404)
 
@@ -314,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _archive(self, preview: bool) -> dict:
         """끝난 공문을 마감 월 폴더로 옮긴다."""
-        base, inbox = organize.resolve_workspace(self.folder)
+        base, inbox = self.base, self.folder
         entries, skipped = [], 0
         for group in fold_groups(self.store.all_docs()):
             if not group["done"] or group.get("archived"):
@@ -357,12 +373,11 @@ class Handler(BaseHTTPRequestHandler):
             if not doc["done"]:
                 counts[doc["category"]] = counts.get(doc["category"], 0) + 1
         urgent = [d for d in docs if not d["done"] and d["days_left"] is not None and d["days_left"] <= 3]
-        base, inbox = organize.resolve_workspace(self.folder)
         return {
             "folder": str(self.folder),
-            "base": str(base),
-            "inbox": str(inbox),
-            "months": sorted(organize.month_dirs(base)),
+            "base": str(self.base),
+            "inbox": str(self.folder),
+            "months": sorted(organize.month_dirs(self.base)),
             "today": today.isoformat(),
             "categories": CATEGORIES,
             "order": CATEGORY_ORDER,
@@ -466,13 +481,15 @@ def already_running(port: int) -> bool:
     return False
 
 
-def start_server(store: Store, folder: Path, port: int = PORT) -> tuple[ThreadingHTTPServer, int]:
+def start_server(store: Store, folder: Path, port: int = PORT,
+                 base: Path | None = None) -> tuple[ThreadingHTTPServer, int]:
     """API 서버를 띄우고 (서버, 실제로 쓴 포트)를 돌려준다.
 
     포트가 이미 쓰이고 있으면 옆 번호로 옮겨 간다.
     """
     Handler.store = store
     Handler.folder = folder
+    Handler.base = base or getattr(Handler, "base", folder.parent)
     last: OSError | None = None
     for offset in range(PORT_TRIES):
         try:
@@ -498,12 +515,14 @@ def main() -> None:
         print(f"폴더를 찾을 수 없습니다: {folder}")
         sys.exit(1)
 
+    base, folder = resolve_inbox(folder)
     store = Store(DB_PATH)
-    print(f"폴더를 읽는 중: {folder}")
+    print(f"업무 폴더: {base}")
+    print(f"공문 폴더를 읽는 중: {folder}")
     report = store.scan(folder, force=args.rescan)
     print(f"새로 분석 {report['added']}건 · 그대로 {report['skipped']}건 · 실패 {report['failed']}건")
 
-    server, port = start_server(store, folder, args.port)
+    server, port = start_server(store, folder, args.port, base=base)
     url = f"http://127.0.0.1:{port}/"
     print(f"주소: {url}   (종료는 Ctrl+C)")
 
