@@ -474,7 +474,7 @@ async function openPanel(id, fileId){
     ${_preview(shown, members.length > 1 ? shown.filename : "")}
     <div class="actions">
       <button class="primary" id="openfile">${members.length > 1 ? "보고 있는 파일 열기" : "원본 파일 열기"}</button>
-      <button class="ghost" id="toggledone">${group.done ? "처리 취소" : "처리 완료로"}</button>
+      <button class="ghost" id="toggledone">${group.done ? "처리 취소" : "처리 완료"}</button>
     </div>`;
 
   $("panel").classList.add("open");
