@@ -151,6 +151,8 @@
     padding-bottom:1px; font-weight:500;
   }
   .sweep:hover{border-bottom-color:var(--seal)}
+  .sweep.quiet{color:var(--ink-soft);font-weight:400}
+  .sweep.quiet:hover{color:var(--ink);border-bottom-color:var(--ink)}
 
   .empty{
     border:1px dashed var(--rule); border-radius:3px; padding:34px 24px;
@@ -346,11 +348,23 @@ function render(){
   if (state.urgent) bits.push(`<span class="alarm">사흘 안 마감 ${state.urgent}건</span>`);
   const overdue = state.docs.filter(d => !d.done && d.days_left !== null && d.days_left < 0);
   if (overdue.length) bits.push(`<button class="sweep" id="sweep">기한 지난 ${overdue.length}건 모두 고르기</button>`);
+
+  const onScreen = visible();
+  const allPicked = onScreen.length > 0 && onScreen.every(d => chosen.has(d.id));
+  if (onScreen.length) bits.push(
+    `<button class="sweep quiet" id="pickall">${allPicked ? "모두 해제" : "모두 고르기"}</button>`);
+
   $("headline").innerHTML = bits.join(" · ");
+
   const sweep = $("sweep");
   if (sweep) sweep.onclick = () => {
     overdue.forEach(d => chosen.add(d.id));
-    renderList();
+    render();
+  };
+  const pickall = $("pickall");
+  if (pickall) pickall.onclick = () => {
+    onScreen.forEach(d => allPicked ? chosen.delete(d.id) : chosen.add(d.id));
+    render();
   };
   $("folder").textContent = state.folder;
 
@@ -420,14 +434,14 @@ function renderList(){
     event.stopPropagation();
     const id = el.parentElement.dataset.id;
     chosen.has(id) ? chosen.delete(id) : chosen.add(id);
-    renderList();
+    render();
   });
   list.querySelectorAll(".bandpick").forEach(el => el.onclick = () => {
     const band = BANDS.find(b => b.key === el.dataset.band);
     const members = el.dataset.band === "done" ? done : buckets.get(band.key);
     const allPicked = members.every(d => chosen.has(d.id));
     members.forEach(d => allPicked ? chosen.delete(d.id) : chosen.add(d.id));
-    renderList();
+    render();
   });
   _bindPickedBar();
 }
@@ -436,11 +450,15 @@ function _pickedBar(){
   const picked = state.docs.filter(d => chosen.has(d.id));
   if (!picked.length) return "";
   const allDone = picked.every(d => d.done);
+  const onScreen = visible();
+  const allPicked = onScreen.length > 0 && onScreen.every(d => chosen.has(d.id));
+  const more = allPicked ? "" : `<button id="bulkall">모두 고르기</button>`;
   return `<div class="picked">
     <b>${picked.length}건</b> 골랐습니다
     <span class="act">
       <button class="go" id="bulkdone">${allDone ? "처리 취소" : "처리 완료로"}</button>
-      <button id="bulkclear">고르기 해제</button>
+      ${more}
+      <button id="bulkclear">해제</button>
     </span></div>`;
 }
 
@@ -458,7 +476,9 @@ function _bindPickedBar(){
                : `${picked.length}건을 다시 처리할 것으로 옮겼습니다.`);
     render();
   };
-  $("bulkclear").onclick = () => { chosen.clear(); renderList(); };
+  $("bulkclear").onclick = () => { chosen.clear(); render(); };
+  const all = $("bulkall");
+  if (all) all.onclick = () => { visible().forEach(d => chosen.add(d.id)); render(); };
 }
 
 function row(doc){
