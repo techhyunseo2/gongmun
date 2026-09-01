@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS docs (
     role            TEXT DEFAULT '',
     receipt_number  TEXT DEFAULT '',
     archived        TEXT DEFAULT '',
+    deadline_edited INTEGER DEFAULT 0,
     done            INTEGER DEFAULT 0,
     memo            TEXT DEFAULT '',
     error           TEXT DEFAULT ''
@@ -64,7 +65,8 @@ class Store:
                                    ("group_key", "TEXT DEFAULT ''"),
                                    ("role", "TEXT DEFAULT ''"),
                                    ("receipt_number", "TEXT DEFAULT ''"),
-                                   ("archived", "TEXT DEFAULT ''")):
+                                   ("archived", "TEXT DEFAULT ''"),
+                                   ("deadline_edited", "INTEGER DEFAULT 0")):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {definition}")
 
@@ -124,8 +126,10 @@ class Store:
                  path=excluded.path, filename=excluded.filename, scanned_at=excluded.scanned_at,
                  title=excluded.title, sender=excluded.sender, doc_number=excluded.doc_number,
                  category=excluded.category, confidence=excluded.confidence,
-                 deadline=excluded.deadline, deadline_context=excluded.deadline_context,
+                 deadline_context=excluded.deadline_context,
                  event_date=excluded.event_date, all_dates=excluded.all_dates,
+                 deadline=CASE WHEN docs.deadline_edited=1 THEN docs.deadline
+                               ELSE excluded.deadline END,
                  summary=excluded.summary, body=excluded.body,
                  body_html=excluded.body_html, group_key=excluded.group_key,
                  role=excluded.role, receipt_number=excluded.receipt_number,
@@ -212,7 +216,13 @@ class Store:
         self.conn.commit()
 
     def set_deadline(self, doc_id: str, deadline: str | None) -> None:
-        self.conn.execute("UPDATE docs SET deadline=? WHERE id=?", (deadline or None, doc_id))
+        """손으로 정한 기한은 표시를 남긴다.
+
+        본문과 첨부를 묶을 때 가장 이른 기한을 쓰는데, 손으로 고친 값은
+        그 계산에 밀리면 안 되기 때문이다.
+        """
+        self.conn.execute("UPDATE docs SET deadline=?, deadline_edited=1 WHERE id=?",
+                          (deadline or None, doc_id))
         self.conn.commit()
 
 

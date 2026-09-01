@@ -39,7 +39,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.3.2"
+VERSION = "1.3.6"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -413,12 +413,20 @@ def fold_groups(docs: list[dict]) -> list[dict]:
         entry["paths"] = [m["path"] for m in members]
         entry["archived"] = next((m.get("archived") for m in members if m.get("archived")), "")
 
-        deadlines = sorted({m["deadline"] for m in members if m.get("deadline")})
-        if deadlines:
-            entry["deadline"] = deadlines[0]
-            if not entry.get("deadline_context"):
-                source = next(m for m in members if m["deadline"] == deadlines[0])
-                entry["deadline_context"] = source.get("deadline_context") or ""
+        # 손으로 정한 기한이 있으면 그것이 먼저다. 없을 때만 묶음에서 가장
+        # 이른 것을 고른다. 제출 기한이 첨부 서식에만 적힌 경우가 흔해서다.
+        edited = next((m for m in members if m.get("deadline_edited")), None)
+        if edited:
+            entry["deadline"] = edited.get("deadline")
+            entry["deadline_context"] = edited.get("deadline_context") or ""
+            entry["deadline_edited"] = 1
+        else:
+            deadlines = sorted({m["deadline"] for m in members if m.get("deadline")})
+            if deadlines:
+                entry["deadline"] = deadlines[0]
+                if not entry.get("deadline_context"):
+                    source = next(m for m in members if m["deadline"] == deadlines[0])
+                    entry["deadline_context"] = source.get("deadline_context") or ""
         events = sorted({m["event_date"] for m in members if m.get("event_date")})
         entry["event_date"] = events[0] if events else None
         entry["all_dates"] = sorted({d for m in members for d in (m.get("all_dates") or [])})

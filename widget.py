@@ -20,7 +20,7 @@ import sys
 import threading
 import tkinter as tk
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import font as tkfont
 
@@ -47,6 +47,7 @@ CAT_COLOR = {
 
 WIDTH, ROWS = 320, 7
 REFRESH_MINUTES = 10
+UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시 본다
 
 
 class Widget:
@@ -353,6 +354,9 @@ class Widget:
         menu.add_separator()
         menu.add_command(label="컴퓨터 켤 때 자동 실행 " + ("끄기" if startup_enabled() else "켜기"),
                          command=self._toggle_startup)
+        menu.add_command(label="업데이트 확인", command=lambda: self.check_update(quiet=False))
+        menu.add_command(label=f"버전 {VERSION}", state="disabled")
+        menu.add_separator()
         menu.add_command(label="닫기", command=self.quit)
         menu.tk_popup(event.x_root, event.y_root)
 
@@ -398,7 +402,7 @@ class Widget:
             if not quiet:
                 self.root.after(0, lambda: self._update_message(str(exc)))
             return
-        self.config["update_checked"] = date.today().isoformat()
+        self.config["update_checked_at"] = datetime.now().isoformat(timespec="seconds")
         save_config(self.config)
         if found:
             self.root.after(0, lambda: self._offer_update(found))
@@ -439,15 +443,21 @@ class Widget:
         updater.restart()
 
     def _maybe_check_update(self) -> None:
-        """하루에 한 번만 조용히 확인한다.
+        """너무 자주는 아니되, 껐다 켜면 다시 확인한다.
 
-        확인한 날짜를 설정에 적어 두고, 날이 바뀌어야 다시 물어본다.
-        프로그램을 껐다 켜지 않아도 열 시간마다 돌아오는 이 자리에서
-        날짜가 바뀐 것을 알아챈다.
+        예전에는 "오늘 확인함"으로 적어 두는 바람에 같은 날 재시작해도
+        건너뛰었다. 새 버전이 나온 걸 알고 껐다 켜도 소용이 없었다.
+        지금은 마지막으로 확인한 시각을 보고 몇 시간이 지났으면 다시 본다.
         """
         self.config = load_config()
-        if self.config.get("update_checked") == date.today().isoformat():
-            return
+        last = self.config.get("update_checked_at")
+        if last:
+            try:
+                elapsed = datetime.now() - datetime.fromisoformat(last)
+                if elapsed < timedelta(hours=UPDATE_GAP_HOURS):
+                    return
+            except ValueError:
+                pass
         self.check_update(quiet=True)
 
     def _tick(self):
