@@ -93,7 +93,7 @@
 
   /* ------------------------------------------------------------ 행 */
   .row{
-    display:grid; grid-template-columns:58px 1fr auto; gap:14px; align-items:baseline;
+    display:grid; grid-template-columns:20px 58px 1fr auto; gap:12px; align-items:baseline;
     width:100%; text-align:left; background:var(--card); border:1px solid var(--rule);
     border-left:3px solid var(--cat-other); border-radius:3px;
     padding:10px 14px; margin-bottom:5px;
@@ -113,6 +113,44 @@
   .meta{display:block; font-size:12.5px; color:var(--ink-soft); margin-top:2px}
   .kind{font-size:12px; color:var(--ink-soft); white-space:nowrap}
   .flag{font-size:11px; color:var(--ochre); margin-left:6px}
+
+  /* 고르기 */
+  .pick{
+    width:15px; height:15px; border:1px solid var(--rule); border-radius:2px;
+    background:var(--paper); align-self:center; position:relative; flex:none;
+  }
+  .row:hover .pick{border-color:var(--ink-soft)}
+  .pick[aria-checked="true"]{background:var(--ink);border-color:var(--ink)}
+  .pick[aria-checked="true"]::after{
+    content:"✓"; position:absolute; inset:0; color:var(--card);
+    font-size:11px; line-height:15px; text-align:center;
+  }
+  .bandpick{
+    font-size:11.5px; color:var(--ink-soft); border-bottom:1px dashed var(--rule);
+    white-space:nowrap; padding-bottom:1px;
+  }
+  .bandpick:hover{color:var(--ink);border-bottom-color:var(--ink)}
+  .picked{
+    position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px;
+    background:var(--ink); color:var(--card); border-radius:3px;
+    padding:9px 14px; margin-bottom:10px; font-size:13.5px;
+  }
+  .picked b{font-weight:600}
+  .picked .act{
+    margin-left:auto; display:flex; gap:6px;
+  }
+  .picked .act button{
+    border:1px solid rgba(251,251,248,.35); border-radius:3px; padding:5px 11px;
+    color:var(--card); font-size:13px;
+  }
+  .picked .act button:hover{background:rgba(251,251,248,.14);border-color:var(--card)}
+  .picked .act .go{background:var(--card);color:var(--ink);border-color:var(--card)}
+  .picked .act .go:hover{background:#fff}
+  .sweep{
+    font-size:13px; color:var(--seal); border-bottom:1px dashed var(--rule);
+    padding-bottom:1px; font-weight:500;
+  }
+  .sweep:hover{border-bottom-color:var(--seal)}
 
   .empty{
     border:1px dashed var(--rule); border-radius:3px; padding:34px 24px;
@@ -219,7 +257,7 @@
     nav{position:static;padding:0 20px 8px;display:flex;flex-wrap:wrap;gap:4px}
     nav hr,#search{display:none}
     section.list{padding:8px 20px 80px}
-    .row{grid-template-columns:52px 1fr;gap:10px}
+    .row{grid-template-columns:20px 52px 1fr;gap:10px}
     .kind{display:none}
   }
 </style>
@@ -306,7 +344,14 @@ function render(){
   const [, mm, dd] = state.today.split("-");
   const bits = [`오늘 ${+mm}월 ${+dd}일`, `처리할 것 <b>${todo}건</b>`];
   if (state.urgent) bits.push(`<span class="alarm">사흘 안 마감 ${state.urgent}건</span>`);
+  const overdue = state.docs.filter(d => !d.done && d.days_left !== null && d.days_left < 0);
+  if (overdue.length) bits.push(`<button class="sweep" id="sweep">기한 지난 ${overdue.length}건 모두 고르기</button>`);
   $("headline").innerHTML = bits.join(" · ");
+  const sweep = $("sweep");
+  if (sweep) sweep.onclick = () => {
+    overdue.forEach(d => chosen.add(d.id));
+    renderList();
+  };
   $("folder").textContent = state.folder;
 
   /* 왼쪽 */
@@ -333,6 +378,8 @@ function render(){
 }
 
 function renderList(){
+  const alive = new Set(state.docs.map(d => d.id));
+  [...chosen].forEach(id => { if (!alive.has(id)) chosen.delete(id); });
   const docs = visible();
   const list = $("list");
   if (!docs.length){
@@ -351,20 +398,67 @@ function renderList(){
     }
   }
 
-  let html = "";
+  let html = _pickedBar();
   for (const band of BANDS){
     const group = buckets.get(band.key);
     if (!group.length) continue;
+    const allPicked = group.every(d => chosen.has(d.id));
     html += `<div class="band ${band.past?"past":""}">
-      <span class="band-name">${band.name}</span><span class="band-line"></span></div>`;
+      <span class="band-name">${band.name}</span><span class="band-line"></span>
+      <button class="bandpick" data-band="${band.key}">${allPicked ? "고르기 해제" : "이 구간 모두"}</button></div>`;
     html += group.map(row).join("");
   }
   if (done.length){
-    html += `<div class="band"><span class="band-name">처리함</span><span class="band-line"></span></div>`;
+    const allDone = done.every(d => chosen.has(d.id));
+    html += `<div class="band"><span class="band-name">처리함</span><span class="band-line"></span>
+      <button class="bandpick" data-band="done">${allDone ? "고르기 해제" : "이 구간 모두"}</button></div>`;
     html += done.map(row).join("");
   }
   list.innerHTML = html;
   list.querySelectorAll(".row").forEach(el => el.onclick = () => openPanel(el.dataset.id));
+  list.querySelectorAll(".pick").forEach(el => el.onclick = event => {
+    event.stopPropagation();
+    const id = el.parentElement.dataset.id;
+    chosen.has(id) ? chosen.delete(id) : chosen.add(id);
+    renderList();
+  });
+  list.querySelectorAll(".bandpick").forEach(el => el.onclick = () => {
+    const band = BANDS.find(b => b.key === el.dataset.band);
+    const members = el.dataset.band === "done" ? done : buckets.get(band.key);
+    const allPicked = members.every(d => chosen.has(d.id));
+    members.forEach(d => allPicked ? chosen.delete(d.id) : chosen.add(d.id));
+    renderList();
+  });
+  _bindPickedBar();
+}
+
+function _pickedBar(){
+  const picked = state.docs.filter(d => chosen.has(d.id));
+  if (!picked.length) return "";
+  const allDone = picked.every(d => d.done);
+  return `<div class="picked">
+    <b>${picked.length}건</b> 골랐습니다
+    <span class="act">
+      <button class="go" id="bulkdone">${allDone ? "처리 취소" : "처리 완료로"}</button>
+      <button id="bulkclear">고르기 해제</button>
+    </span></div>`;
+}
+
+function _bindPickedBar(){
+  const go = $("bulkdone");
+  if (!go) return;
+  go.onclick = async () => {
+    const picked = state.docs.filter(d => chosen.has(d.id));
+    const done = !picked.every(d => d.done);
+    const members = picked.flatMap(d => (d.members || [{id:d.id}]).map(m => m.id));
+    go.textContent = "처리 중";
+    state = await call("/api/done", {members, done});
+    chosen.clear();
+    toast(done ? `${picked.length}건을 처리함으로 옮겼습니다.`
+               : `${picked.length}건을 다시 처리할 것으로 옮겼습니다.`);
+    render();
+  };
+  $("bulkclear").onclick = () => { chosen.clear(); renderList(); };
 }
 
 function row(doc){
@@ -384,6 +478,8 @@ function row(doc){
   const clip = doc.attachments ? `<span class="clip">첨부 ${doc.attachments}</span>` : "";
   return `<button class="row ${doc.done?"done":""}" data-id="${doc.id}"
       style="border-left-color:${CAT_COLOR[doc.category]}" aria-selected="${selected===doc.id}">
+    <span class="pick" role="checkbox" aria-checked="${chosen.has(doc.id)}"
+      title="고르기"></span>
     <span class="${cls}">${badge}</span>
     <span><span class="name">${esc(doc.title || doc.filename)}</span>${low}${clip}${box}
       <span class="meta">${esc(meta)}</span></span>
@@ -409,6 +505,7 @@ function _shortFile(doc){
 const esc = s => (s||"").replace(/[<>&"]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
 
 /* ------------------------------------------------------------- 상세 */
+let chosen = new Set();
 let plainView = false;
 let viewingFile = null;    // 묶음 안에서 지금 보고 있는 파일
 
@@ -474,7 +571,7 @@ async function openPanel(id, fileId){
     ${_preview(shown, members.length > 1 ? shown.filename : "")}
     <div class="actions">
       <button class="primary" id="openfile">${members.length > 1 ? "보고 있는 파일 열기" : "원본 파일 열기"}</button>
-      <button class="ghost" id="toggledone">${group.done ? "처리 취소" : "처리 완료"}</button>
+      <button class="ghost" id="toggledone">${group.done ? "처리 취소" : "처리 완료로"}</button>
     </div>`;
 
   $("panel").classList.add("open");

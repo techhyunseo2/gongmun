@@ -95,15 +95,33 @@ def find_dates(text: str, base: date | None = None) -> list[tuple[list[date], st
     for sentence in _sentences(text):
         if _REFERENCE_LINE.search(sentence) or _ROUTING_LINE.search(sentence):
             continue
-        dates: list[date] = []
-        for pattern in _DATE_PATTERNS:
-            for match in pattern.finditer(sentence):
-                parsed = _to_date(match, base)
-                if parsed and parsed not in dates:
-                    dates.append(parsed)
+        dates = _dates_in(sentence, base)
         if dates:
-            found.append((sorted(dates), sentence))
+            found.append((dates, sentence))
     return found
+
+
+def _dates_in(sentence: str, base: date) -> list[date]:
+    """한 문장에서 날짜를 뽑되 같은 자리를 두 번 세지 않는다.
+
+    "2004. 3. 1." 은 연도까지 있는 패턴이 먼저 통째로 잡는다. 뒤이어
+    연도 없는 패턴이 "3. 1." 을 또 잡으면 있지도 않은 올해 3월 1일이
+    생겨 버리므로, 이미 쓴 자리는 건너뛴다.
+    """
+    used: list[tuple[int, int]] = []
+    dates: list[date] = []
+    for pattern in _DATE_PATTERNS:                # 연도가 있는 것부터 본다
+        for match in pattern.finditer(sentence):
+            span = match.span()
+            if any(span[0] < end and start < span[1] for start, end in used):
+                continue
+            parsed = _to_date(match, base)
+            if parsed is None:
+                continue
+            used.append(span)
+            if parsed not in dates:
+                dates.append(parsed)
+    return sorted(dates)
 
 
 def flatten_dates(found: list[tuple[list[date], str]]) -> list[date]:
@@ -132,18 +150,25 @@ def _to_date(match: re.Match, base: date) -> date | None:
         return None
 
 
+# 규정이나 지침에는 부칙의 시행일처럼 아주 오래된 날짜가 섞여 있다.
+# 이만큼 지난 날짜는 내가 지켜야 할 기한일 리 없다.
+_STALE_DAYS = 400
+
+
 def _is_deadline_sentence(sentence: str) -> bool:
     return any(cue in sentence for cue in _DEADLINE_CUES)
 
 
-def pick_deadline(found: list[tuple[list[date], str]]) -> tuple[date | None, str]:
+def pick_deadline(found: list[tuple[list[date], str]],
+                  base: date | None = None) -> tuple[date | None, str]:
     """마감 문장에서 마감일을 고른다.
 
     한 문장에 '9. 1. ~ 9. 5.'처럼 기간이 적혀 있으면 끝 날짜가 마감이다.
     마감 문장이 여러 개면 그중 가장 이른 것을 따른다.
     """
+    floor = (base or date.today()) - timedelta(days=_STALE_DAYS)
     candidates = [(dates[-1], sentence) for dates, sentence in found
-                  if _is_deadline_sentence(sentence)]
+                  if _is_deadline_sentence(sentence) and dates[-1] >= floor]
     if not candidates:
         return None, ""
     chosen = min(candidates, key=lambda item: item[0])
@@ -261,7 +286,7 @@ def analyze(title_fallback: str, body: str, base: date | None = None) -> dict:
     base = base or date.today()
     title = guess_title(body, title_fallback)
     found = find_dates(body, base)
-    deadline, deadline_context = pick_deadline(found)
+    deadline, deadline_context = pick_deadline(found, base)
     event_date = pick_event_date(found, base)
 
     category, scores = classify(
