@@ -439,7 +439,13 @@ class Widget:
         updater.restart()
 
     def _maybe_check_update(self) -> None:
-        """하루에 한 번만 조용히 확인한다."""
+        """하루에 한 번만 조용히 확인한다.
+
+        확인한 날짜를 설정에 적어 두고, 날이 바뀌어야 다시 물어본다.
+        프로그램을 껐다 켜지 않아도 열 시간마다 돌아오는 이 자리에서
+        날짜가 바뀐 것을 알아챈다.
+        """
+        self.config = load_config()
         if self.config.get("update_checked") == date.today().isoformat():
             return
         self.check_update(quiet=True)
@@ -449,6 +455,9 @@ class Widget:
 
     def _on_tick(self):
         self.refresh(scan=True)
+        # 켜 둔 채로 며칠이 지나도 날이 바뀌면 새 버전을 확인한다.
+        # 하루에 한 번만 실제로 물어보도록 안에서 걸러진다.
+        self._maybe_check_update()
         self._tick()
         # 같은 학교 여러 대가 한꺼번에 몰리지 않도록 조금 흩어 놓는다
         self.root.after(random.randint(5, 90) * 1000, self._maybe_check_update)
