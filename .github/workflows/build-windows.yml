@@ -35,8 +35,8 @@ jobs:
       - name: 버전 읽기
         id: version
         run: |
-          $v = python -c "import re,pathlib; print(re.search(r'VERSION = \"([^\"]+)\"', pathlib.Path('app.py').read_text(encoding='utf-8')).group(1))"
-          if (-not $v) { throw "app.py 에서 VERSION 을 찾지 못했습니다" }
+          $v = python version_of.py
+          if ($LASTEXITCODE -ne 0 -or -not $v) { throw "app.py 에서 VERSION 을 읽지 못했습니다" }
           "value=$v" >> $env:GITHUB_OUTPUT
           Write-Host "버전 $v"
 
