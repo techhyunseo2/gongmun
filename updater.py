@@ -26,7 +26,12 @@ from app import UPDATE_REPO, VERSION
 LATEST = "https://github.com/{repo}/releases/latest"
 DOWNLOAD = "https://github.com/{repo}/releases/download/{tag}/{asset}"
 API = "https://api.github.com/repos/{repo}/releases/latest"
-ASSET_NAME = "공문정리함.exe"
+# 내려받을 실행 파일 이름. 반드시 영문이어야 한다 — GitHub 릴리스가 한글
+# 첨부 파일명을 제멋대로 바꿔서(공문정리함.exe → default.exe) 이 주소가
+# 404 가 나고 "내려받다가 끊겼습니다" 로 실패하기 때문. 평소에는 API 로
+# 실제 첨부 주소를 확인하고, API 가 막히면 이 이름으로 주소를 만든다.
+ASSET_NAME = "gongmun.exe"
+MIN_EXE_BYTES = 5_000_000
 TIMEOUT = 20
 
 
@@ -68,11 +73,13 @@ def check() -> dict | None:
     if not is_newer(tag):
         return None
 
+    info = _release_info()
+    fallback = DOWNLOAD.format(repo=UPDATE_REPO, tag=quote(tag),
+                               asset=quote(ASSET_NAME))
     return {
         "version": tag.lstrip("vV"),
-        "url": DOWNLOAD.format(repo=UPDATE_REPO, tag=quote(tag),
-                               asset=quote(ASSET_NAME)),
-        "notes": _release_notes(),
+        "url": info.get("asset_url") or fallback,
+        "notes": info.get("notes", ""),
     }
 
 
@@ -98,8 +105,14 @@ def _latest_tag() -> str:
     return unquote(final.rsplit("/tag/", 1)[1].strip("/"))
 
 
-def _release_notes() -> str:
-    """설명글은 있으면 좋고 없어도 그만이라 실패해도 조용히 넘어간다."""
+def _release_info() -> dict:
+    """API 한 번으로 설명글과 '실제로 올라와 있는' exe 주소를 함께 가져온다.
+
+    api.github.com 은 IP 하나당 시간당 60번 제한이 있어 실패할 수 있다.
+    실패하면 빈 dict 를 돌려주고, 부르는 쪽이 ASSET_NAME 으로 주소를
+    직접 만든다. 첨부가 여럿이면(설치 파일 + 실행 파일) 더 작은 쪽이
+    PyInstaller 실행 파일이다.
+    """
     request = urllib.request.Request(
         API.format(repo=UPDATE_REPO),
         headers={"Accept": "application/vnd.github+json", "User-Agent": "gongmun"},
@@ -107,12 +120,58 @@ def _release_notes() -> str:
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             release = json.loads(response.read().decode("utf-8"))
-        return (release.get("body") or "").strip()[:400]
     except Exception:  # noqa: BLE001
-        return ""
+        return {}
+    return _parse_release(release)
+
+
+def _parse_release(release: dict) -> dict:
+    """API 응답에서 설명글과 내려받을 exe 주소를 뽑는다."""
+    info = {"notes": (release.get("body") or "").strip()[:400]}
+    exes = [a for a in release.get("assets", [])
+            if str(a.get("name", "")).lower().endswith(".exe")
+            and a.get("state", "uploaded") == "uploaded"
+            and a.get("browser_download_url")]
+    if exes:
+        chosen = min(exes, key=lambda a: a.get("size") or 0)
+        info["asset_url"] = chosen["browser_download_url"]
+    return info
 
 
 # ------------------------------------------------------------------ 설치
+
+def _download(url: str, dest: Path) -> None:
+    """새 exe 를 내려받아 dest 에 저장한다. 온전하지 않으면 예외를 던진다.
+
+    학교 인터넷은 중간에 잘 끊긴다. 한 번은 다시 시도하고, 다 받은 파일이
+    Content-Length 와 맞는지, 실행 파일이라 할 만한 크기인지 확인한다.
+    """
+    request = urllib.request.Request(url, headers={"User-Agent": "gongmun"})
+    last: Exception | None = None
+
+    for _ in range(2):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                expected = int(response.headers.get("Content-Length") or 0)
+                with dest.open("wb") as handle:
+                    shutil.copyfileobj(response, handle)
+        except urllib.error.HTTPError as exc:
+            dest.unlink(missing_ok=True)
+            raise UpdateError(
+                "받을 파일을 찾지 못했습니다. 설치 파일을 새로 내려받아 "
+                f"다시 설치해 주세요. (오류 {exc.code})") from exc
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            last = exc
+            continue
+
+        size = dest.stat().st_size
+        if size >= MIN_EXE_BYTES and (not expected or size == expected):
+            return
+        last = UpdateError(f"파일이 덜 받아졌습니다. ({size:,}바이트)")
+
+    dest.unlink(missing_ok=True)
+    raise UpdateError("내려받다가 끊겼습니다. 잠시 뒤 다시 해 보세요.") from last
+
 
 def apply(url: str) -> Path:
     """새 파일을 내려받아 지금 실행 파일 자리에 놓는다. 새 파일 경로를 돌려준다."""
@@ -120,20 +179,9 @@ def apply(url: str) -> Path:
         raise UpdateError("소스로 실행 중일 때는 자동 업데이트를 쓸 수 없습니다.")
 
     current = Path(sys.executable).resolve()
-    downloaded = Path(tempfile.gettempdir()) / "공문정리함_새버전.exe"
+    downloaded = Path(tempfile.gettempdir()) / "gongmun_new.exe"
 
-    request = urllib.request.Request(url, headers={"User-Agent": "gongmun"})
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response, \
-             downloaded.open("wb") as handle:
-            shutil.copyfileobj(response, handle)
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
-        downloaded.unlink(missing_ok=True)
-        raise UpdateError("내려받다가 끊겼습니다. 잠시 뒤 다시 해 보세요.") from exc
-
-    if downloaded.stat().st_size < 1_000_000:
-        downloaded.unlink(missing_ok=True)
-        raise UpdateError("내려받은 파일이 온전하지 않습니다.")
+    _download(url, downloaded)
 
     backup = current.with_suffix(current.suffix + ".old")
     backup.unlink(missing_ok=True)

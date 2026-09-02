@@ -6,7 +6,10 @@
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
-#define AppExe "공문정리함.exe"
+; exe 파일명은 영문이어야 한다. GitHub 릴리스가 한글 첨부 파일명을
+; 바꿔 버려 자동 업데이트가 깨지기 때문(build.spec 주석 참고).
+#define AppExe "gongmun.exe"
+#define OldAppExe "공문정리함.exe"
 
 [Setup]
 AppId={{7C3F1E2A-9B41-4D6E-8A25-5F0C7D9E1B33}
@@ -19,7 +22,7 @@ DisableProgramGroupPage=yes
 DisableDirPage=yes
 PrivilegesRequired=lowest
 OutputDir=dist
-OutputBaseFilename=공문정리함-설치
+OutputBaseFilename=gongmun-setup
 SetupIconFile=icon.ico
 Compression=lzma2/max
 SolidCompression=yes
@@ -30,6 +33,13 @@ UninstallDisplayName={#AppName}
 [Tasks]
 Name: "desktopicon"; Description: "바탕화면에 아이콘 만들기"; GroupDescription: "추가 설정:"
 Name: "startupicon"; Description: "컴퓨터를 켤 때 자동으로 띄우기"; GroupDescription: "추가 설정:"
+
+; 예전 한글 이름 exe 와 업데이트 찌꺼기를 지운다. 바로가기는 [Icons]가
+; 어차피 새 exe 를 가리키도록 다시 만든다.
+[InstallDelete]
+Type: files; Name: "{app}\{#OldAppExe}"
+Type: files; Name: "{app}\{#OldAppExe}.old"
+Type: files; Name: "{app}\{#AppExe}.old"
 
 [Files]
 Source: "dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion

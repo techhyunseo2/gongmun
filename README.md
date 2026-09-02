@@ -205,11 +205,12 @@ python app.py
 ## exe로 만들기
 
 ```
-pip install pyinstaller
-pyinstaller --onefile --add-data "ui.html;." --name 공문정리함 app.py
+pip install -r requirements.txt pyinstaller
+pyinstaller --clean --noconfirm build.spec
 ```
 
-`dist\공문정리함.exe`가 만들어집니다. 리눅스나 맥에서는 `;.` 대신 `:.`를 씁니다.
+`dist\gongmun.exe`가 만들어집니다. (exe 이름은 영문이어야 합니다 —
+GitHub 릴리스가 한글 첨부 파일명을 바꿔 버려 자동 업데이트가 깨집니다.)
 
 ## 개인정보
 
