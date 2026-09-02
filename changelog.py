@@ -104,6 +104,18 @@ def release_body(version: str, path: Path | None = None) -> str:
 
 
 if __name__ == "__main__":
+    # 빌드 러너에서는 stdout 이 콘솔이 아니라 파이프다. 그때 파이썬은 윈도우의
+    # 기본 코드페이지(cp1252 등)로 내보내려 하고, 한글이 하나라도 있으면
+    # UnicodeEncodeError 로 죽는다. 파일은 이미 UTF-8 로 잘 썼는데 확인용
+    # 출력 한 줄 때문에 빌드가 통째로 멈추던 자리다.
+    # (version_of.py 가 멀쩡했던 건 숫자만 찍기 때문이고, 회귀 테스트가
+    #  멀쩡했던 건 unittest 가 stderr 로 쓰는데 stderr 는 기본 오류 처리가
+    #  backslashreplace 라 죽지 않기 때문이다.)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
     args = sys.argv[1:]
     if args and args[0] == "--release":
         if len(args) < 3:

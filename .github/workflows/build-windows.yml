@@ -21,6 +21,13 @@ jobs:
   build:
     runs-on: windows-latest
 
+    # 러너의 stdout 은 파이프라 파이썬이 윈도우 기본 코드페이지로 내보내려 한다.
+    # 한글을 찍는 순간 UnicodeEncodeError 로 죽으므로 UTF-8 을 못 박는다.
+    # 테스트 이름에 한글이 많은데, 이게 없으면 로그에서도 깨져 보인다.
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+
     defaults:
       run:
         shell: pwsh

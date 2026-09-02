@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -72,6 +73,40 @@ class Parsing(unittest.TestCase):
         body = changelog.release_body("9.9.9", self.tmp)
         self.assertNotIn("## 바뀐 점", body)
         self.assertIn("gongmun-setup.exe", body)
+
+
+class CommandLine(unittest.TestCase):
+    """빌드가 부르는 방식 그대로 돌려 본다.
+
+    러너에서는 stdout 이 파이프여서 파이썬이 윈도우 기본 코드페이지로
+    내보내려 한다. 한글을 찍으면 UnicodeEncodeError 로 죽고 빌드가 멈춘다.
+    실제로 v1.4.0 빌드가 이것 때문에 "릴리스 설명글을 만들지 못했습니다" 로
+    실패했다. 그 상황을 흉내 내려고 일부러 cp1252 를 물려서 돌린다.
+    """
+
+    def _run(self, *args, encoding: str = "cp1252"):
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = encoding      # 러너의 좁은 인코딩을 흉내
+        env.pop("PYTHONUTF8", None)
+        return subprocess.run([sys.executable, "changelog.py", *args],
+                              cwd=ROOT, env=env, capture_output=True, timeout=60)
+
+    def test_release_mode_survives_narrow_stdout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "release-notes.md"
+            done = self._run("--release", "1.4.1", str(out))
+            self.assertEqual(done.returncode, 0,
+                             f"stderr: {done.stderr.decode('utf-8', 'replace')}")
+            self.assertIn("바뀐 점", out.read_text(encoding="utf-8"))
+
+    def test_print_mode_survives_narrow_stdout(self):
+        done = self._run("1.4.1")
+        self.assertEqual(done.returncode, 0,
+                         f"stderr: {done.stderr.decode('utf-8', 'replace')}")
+        self.assertTrue(done.stdout.strip(), "바뀐 점이 출력되지 않았습니다")
+
+    def test_no_arguments_explains_usage(self):
+        self.assertNotEqual(self._run().returncode, 0)
 
 
 class ShippingChecklist(unittest.TestCase):
