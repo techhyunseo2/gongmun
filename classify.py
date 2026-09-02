@@ -80,6 +80,21 @@ def _sentences(text: str) -> list[str]:
 # 다른 공문을 인용하는 줄. 여기 붙은 날짜는 내 일정이 아니다.
 _REFERENCE_LINE = re.compile(r"^\s*\d?\s*\.?\s*관련\s*[:：]|관련\s*근거|^\s*근\s*거\s*[:：]")
 
+# "1. 관련" / "관련:" / "근거" 처럼 인용 블록을 여는 머리줄. 뒤에 다른 내용이
+# 붙지 않고 그 말만 있는 경우다. 이 다음에 오는 들여쓴 하위 항목들
+# (가. 나. / 1) / ① / - )은 전부 다른 공문을 가리키는 인용이므로 날짜를 읽지
+# 않는다. 최상위 항목("2." 등)이나 빈 줄이 나오면 블록이 끝난다.
+_REF_BLOCK_HEADER = re.compile(
+    r"^\s*[※*\-]?\s*(?:\d+\s*[.)]\s*)?(?:관\s*련|근\s*거)(?:\s*근거|\s*사항)?\s*[:：]?\s*$")
+_REF_SUBITEM = re.compile(
+    r"^\s*(?:[가-힣]\s*[.)]|[a-zA-Z]\s*[.)]|\d+\s*\)|[①-⑮㉠-㉭]|[▪▶◦○·•*∙]|-\s)\s*")
+
+# "교원인사과-14453호(2026. 7. 31.)" 처럼 문서번호 바로 뒤에 괄호 날짜가 붙은
+# 인용. 한 문장에 실제 기한과 섞여 있어도 이 부분만 지우고 나머지를 읽는다.
+_CITATION_DATE = re.compile(
+    r"[가-힣A-Za-z][가-힣A-Za-z\d]{1,19}\s*-\s*\d{3,7}\s*호?\s*"
+    r"[,(]?\s*\(?\s*20\d{2}\s*[.\-]\s*\d{1,2}\s*[.\-]\s*\d{1,2}\s*\.?\s*\)?자?")
+
 # 공문 아래쪽 결재선과 시행·접수 줄. 여기 날짜는 문서를 주고받은 날이지
 # 내가 지켜야 할 날이 아니다.
 _ROUTING_LINE = re.compile(
@@ -91,25 +106,45 @@ def find_dates(text: str, base: date | None = None) -> list[tuple[list[date], st
     """본문을 문장 단위로 훑어 (그 문장에 나온 날짜들, 문장) 목록을 만든다."""
     base = base or date.today()
     found: list[tuple[list[date], str]] = []
+    in_ref_block = False
 
-    for sentence in _sentences(text):
-        if _REFERENCE_LINE.search(sentence) or _ROUTING_LINE.search(sentence):
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            in_ref_block = False
             continue
-        dates = _dates_in(sentence, base)
-        if dates:
-            found.append((dates, sentence))
+        if _REF_BLOCK_HEADER.match(line):
+            in_ref_block = True
+            continue
+        if in_ref_block:
+            if _REF_SUBITEM.match(line):
+                continue          # 인용 블록의 하위 항목 — 날짜를 읽지 않는다
+            in_ref_block = False   # 최상위 항목·본문이 시작되면 블록이 끝남
+
+        for sentence in _sentences(line):
+            if _REFERENCE_LINE.search(sentence) or _ROUTING_LINE.search(sentence):
+                continue
+            scrubbed = _CITATION_DATE.sub("  ", sentence)
+            dates = _dates_in(scrubbed, base)
+            if dates:
+                found.append((dates, sentence))
     return found
 
 
 def _dates_in(sentence: str, base: date) -> list[date]:
-    """한 문장에서 날짜를 뽑되 같은 자리를 두 번 세지 않는다.
+    """한 문장에서 날짜를 뽑아 정렬해 돌려준다 (위치 정보 없이)."""
+    return sorted({d for d, _ in _dated_spans(sentence, base)})
+
+
+def _dated_spans(sentence: str, base: date) -> list[tuple[date, int]]:
+    """(날짜, 시작위치) 목록. 같은 자리를 두 번 세지 않는다.
 
     "2004. 3. 1." 은 연도까지 있는 패턴이 먼저 통째로 잡는다. 뒤이어
     연도 없는 패턴이 "3. 1." 을 또 잡으면 있지도 않은 올해 3월 1일이
     생겨 버리므로, 이미 쓴 자리는 건너뛴다.
     """
     used: list[tuple[int, int]] = []
-    dates: list[date] = []
+    out: list[tuple[date, int]] = []
     for pattern in _DATE_PATTERNS:                # 연도가 있는 것부터 본다
         for match in pattern.finditer(sentence):
             span = match.span()
@@ -119,9 +154,8 @@ def _dates_in(sentence: str, base: date) -> list[date]:
             if parsed is None:
                 continue
             used.append(span)
-            if parsed not in dates:
-                dates.append(parsed)
-    return sorted(dates)
+            out.append((parsed, span[0]))
+    return out
 
 
 def flatten_dates(found: list[tuple[list[date], str]]) -> list[date]:
@@ -159,6 +193,21 @@ def _is_deadline_sentence(sentence: str) -> bool:
     return any(cue in sentence for cue in _DEADLINE_CUES)
 
 
+def _deadline_date_in(sentence: str, dates: list[date], base: date) -> date:
+    """마감 문장에서 실제 마감일을 고른다.
+
+    "10. 5. 실시하며, 명단은 9. 30.까지 제출"처럼 한 문장에 행사일과
+    마감일이 같이 있으면 '까지' 앞에 있는 날짜가 마감이다. '까지'가 없으면
+    (기간 표기 '9. 1.~9. 5.' 등) 마지막 날짜를 끝으로 본다.
+    """
+    cut = sentence.find("까지")
+    if cut == -1:
+        return dates[-1]
+    # '까지' 바로 앞(위치상 가장 나중)에 있는 날짜가 마감이다.
+    before = [(pos, d) for d, pos in _dated_spans(sentence, base) if pos < cut]
+    return max(before)[1] if before else dates[-1]
+
+
 def pick_deadline(found: list[tuple[list[date], str]],
                   base: date | None = None) -> tuple[date | None, str]:
     """마감 문장에서 마감일을 고른다.
@@ -166,9 +215,15 @@ def pick_deadline(found: list[tuple[list[date], str]],
     한 문장에 '9. 1. ~ 9. 5.'처럼 기간이 적혀 있으면 끝 날짜가 마감이다.
     마감 문장이 여러 개면 그중 가장 이른 것을 따른다.
     """
-    floor = (base or date.today()) - timedelta(days=_STALE_DAYS)
-    candidates = [(dates[-1], sentence) for dates, sentence in found
-                  if _is_deadline_sentence(sentence) and dates[-1] >= floor]
+    base = base or date.today()
+    floor = base - timedelta(days=_STALE_DAYS)
+    candidates = []
+    for dates, sentence in found:
+        if not _is_deadline_sentence(sentence):
+            continue
+        chosen_date = _deadline_date_in(sentence, dates, base)
+        if chosen_date >= floor:
+            candidates.append((chosen_date, sentence))
     if not candidates:
         return None, ""
     chosen = min(candidates, key=lambda item: item[0])
