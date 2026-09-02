@@ -26,8 +26,9 @@ from tkinter import font as tkfont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app import (DB_PATH, PORT, VERSION, already_running, fold_groups, load_config, open_in_os,  # noqa: E402
-                 resolve_folder, resolve_inbox, save_config, start_server)
+from app import (DB_PATH, PORT, VERSION, Handler, already_running, fold_groups,  # noqa: E402
+                 load_config, open_in_os, resolve_folder, resolve_inbox, save_config,
+                 start_server)
 from classify import CATEGORIES, days_left  # noqa: E402
 from store import Store  # noqa: E402
 import updater  # noqa: E402
@@ -46,7 +47,8 @@ CAT_COLOR = {
 }
 
 WIDTH, ROWS = 320, 7
-REFRESH_MINUTES = 10
+REFRESH_MINUTES = 10        # 폴더에 새 파일이 들어왔는지 훑는 주기 (디스크를 읽는다)
+LIVE_SECONDS = 2.5          # 브라우저에서 고친 게 있는지 보는 주기 (번호만 본다)
 UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시 본다
 
 
@@ -59,6 +61,8 @@ class Widget:
         self.config = load_config()
         self.collapsed = False
         self.scanning = False
+        self._seen_rev = -1     # 마지막으로 반영한 저장소 번호
+        self._drawn = None      # 마지막으로 그린 내용. 같으면 다시 그리지 않는다
 
         self.root = tk.Tk()
         self.root.title("공문 정리함")
@@ -74,6 +78,7 @@ class Widget:
 
         self.refresh(scan=True)
         self._tick()
+        self._live_tick()
         # 같은 학교 여러 대가 한꺼번에 몰리지 않도록 조금 흩어 놓는다
         self.root.after(random.randint(5, 90) * 1000, self._maybe_check_update)
 
@@ -253,10 +258,20 @@ class Widget:
         self.btn_scan.config(text="다시 훑기")
         self.draw()
 
+    def redraw(self):
+        """내용이 그대로여도 다시 그린다.
+
+        요약줄을 "새 버전을 받는 중" 같은 다른 글로 덮어썼다가 되돌릴 때는
+        내용이 안 바뀌었어도 그려야 한다.
+        """
+        self._drawn = None
+        self.draw()
+
     def draw(self):
         today = date.today()
         # 대시보드와 같은 방식으로 센다. 본문과 첨부는 공문 하나로 묶인다.
-        docs = [d for d in fold_groups(self.store.all_docs()) if not d["done"]]
+        everything = fold_groups(self.store.all_docs())
+        docs = [d for d in everything if not d["done"]]
         for doc in docs:
             doc["left"] = days_left(doc.get("deadline"), today)
         docs.sort(key=_widget_sort)
@@ -265,6 +280,16 @@ class Widget:
         text = f"처리할 것 {len(docs)}건"
         if urgent:
             text += f" · 사흘 안 마감 {urgent}건"
+
+        # 보이는 것이 그대로면 아예 손대지 않는다. 몇 초마다 도는 감시 타이머가
+        # 매번 행을 지웠다 다시 만들면 창 높이가 튀고 눈에 거슬리기 때문이다.
+        signature = (today, text, len(docs), bool(everything),
+                     tuple((d["id"], d["left"], d["category"], d.get("event_date"),
+                            d["title"] or d["filename"]) for d in docs[:ROWS]))
+        if signature == self._drawn:
+            return
+        self._drawn = signature
+
         self.summary.config(text=text, fg=SEAL if urgent else SOFT)
         self.stamp.config(text=f"{today.month}월 {today.day}일 기준")
 
@@ -272,8 +297,7 @@ class Widget:
             child.destroy()
 
         if not docs:
-            total = len(self.store.all_docs())
-            message = "처리할 공문이 없습니다" if total else "폴더에 공문을 넣고\n다시 훑기를 눌러 주세요"
+            message = "처리할 공문이 없습니다" if everything else "폴더에 공문을 넣고\n다시 훑기를 눌러 주세요"
             tk.Label(self.rows, text=message, font=self.f_row, justify="center",
                      bg=PAPER, fg=SOFT, pady=22).pack(fill="x")
             self._fit_height()
@@ -431,7 +455,7 @@ class Widget:
             updater.apply(found["url"])
         except updater.UpdateError as exc:
             self.root.after(0, lambda: self._update_message(f"업데이트하지 못했습니다.\n\n{exc}"))
-            self.root.after(0, self.draw)
+            self.root.after(0, self.redraw)
             return
         self.root.after(0, lambda: self._finish_update(found["version"]))
 
@@ -459,6 +483,33 @@ class Widget:
             except ValueError:
                 pass
         self.check_update(quiet=True)
+
+    def _live_tick(self):
+        """브라우저에서 고친 것을 곧바로 따라 그린다.
+
+        디스크는 건드리지 않는다. 저장소가 매기는 번호(rev)만 보고 달라졌을
+        때만 다시 그리므로 몇 초마다 돌아도 부담이 없다. 새 파일이 들어왔는지
+        훑는 일은 `_on_tick` 이 십 분에 한 번 따로 한다.
+
+        메인 스레드에서만 돈다 — tkinter 를 다른 스레드에서 만지지 않기 위해서다.
+        """
+        try:
+            self._sync_folder()
+            if self.store.rev != self._seen_rev:
+                self._seen_rev = self.store.rev
+                self.draw()
+        finally:
+            self.root.after(int(LIVE_SECONDS * 1000), self._live_tick)
+
+    def _sync_folder(self):
+        """브라우저에서 폴더를 바꿨으면 위젯도 그쪽을 보게 한다."""
+        folder = getattr(Handler, "folder", None)
+        if folder is None or folder == self.folder:
+            return
+        self.folder = folder
+        self.base = getattr(Handler, "base", None) or folder.parent
+        self._paint_folder()
+        self._drawn = None          # 폴더가 바뀌었으니 목록도 새로 그린다
 
     def _tick(self):
         self.root.after(REFRESH_MINUTES * 60_000, self._on_tick)

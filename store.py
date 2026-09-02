@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from datetime import date
 from pathlib import Path
 
@@ -50,13 +51,33 @@ CREATE INDEX IF NOT EXISTS idx_deadline ON docs(deadline);
 
 
 class Store:
+    """SQLite 저장소. 위젯과 브라우저가 같은 객체를 나눠 쓴다.
+
+    커넥션 하나를 여러 스레드가 함께 쓴다 — tkinter 메인 스레드(위젯 그리기),
+    위젯의 스캔 스레드, 그리고 HTTP 요청마다 생기는 스레드들. `check_same_thread`
+    를 끄는 것만으로는 안전해지지 않아서(파이썬의 검사만 꺼질 뿐 직렬화는 되지
+    않는다) 모든 접근을 락 하나로 묶는다. 이게 없으면 스캔이 커밋하기 전 상태를
+    다른 쪽이 읽거나, 남의 트랜잭션이 같이 커밋되는 일이 생긴다.
+
+    `rev` 는 내용이 바뀔 때마다 오르는 번호다. 위젯과 브라우저는 이 번호만
+    보고 "다시 그릴 일이 있는지" 판단한다. 전체를 다시 읽어 비교할 필요가 없다.
+    """
+
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self.rev = 0
         self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self._migrate()
         self.conn.commit()
+
+    def touch(self) -> int:
+        """내용이 바뀌었다고 알린다. 보는 쪽이 다시 그리게 된다."""
+        with self._lock:
+            self.rev += 1
+            return self.rev
 
     def _migrate(self) -> None:
         """예전 버전에서 만든 파일에 새 칸을 붙인다."""
@@ -74,8 +95,15 @@ class Store:
 
     def scan(self, folder: Path, force: bool = False) -> dict:
         """폴더를 훑어 새 파일만 분석한다."""
-        added = skipped = failed = 0
-        known = {row["id"] for row in self.conn.execute("SELECT id FROM docs")}
+        with self._lock:
+            report = self._scan(folder, force)
+        return report
+
+    def _scan(self, folder: Path, force: bool = False) -> dict:
+        added = skipped = failed = moved = 0
+        # 경로까지 같이 들고 온다. 이름만 바뀐 파일을 알아보기 위해서다.
+        known = {row["id"]: row["path"]
+                 for row in self.conn.execute("SELECT id, path FROM docs")}
         seen: set[str] = set()
 
         for path in sorted(folder.rglob("*")):
@@ -86,8 +114,12 @@ class Store:
             doc_id = _file_id(path)
             seen.add(doc_id)
             if doc_id in known and not force:
-                self.conn.execute("UPDATE docs SET path=?, filename=? WHERE id=?",
-                                  (str(path), path.name, doc_id))
+                # 자리나 이름이 그대로면 아무것도 쓰지 않는다. 쓸데없이 써 두면
+                # 바뀐 게 없는데도 rev 가 올라 위젯이 헛되이 다시 그린다.
+                if known[doc_id] != str(path):
+                    self.conn.execute("UPDATE docs SET path=?, filename=? WHERE id=?",
+                                      (str(path), path.name, doc_id))
+                    moved += 1
                 skipped += 1
                 continue
             try:
@@ -111,7 +143,10 @@ class Store:
 
         removed = self._forget_missing(seen, folder)
         self.conn.commit()
-        return {"added": added, "skipped": skipped, "failed": failed, "removed": removed}
+        if added or failed or removed or moved:
+            self.rev += 1
+        return {"added": added, "skipped": skipped, "failed": failed,
+                "removed": removed, "moved": moved}
 
     def _upsert(self, doc_id: str, path: Path, result: dict, body: str,
                 body_html: str, error: str) -> None:
@@ -175,11 +210,13 @@ class Store:
     # ------------------------------------------------------------- 조회
 
     def all_docs(self) -> list[dict]:
-        rows = self.conn.execute("SELECT * FROM docs").fetchall()
+        with self._lock:
+            rows = self.conn.execute("SELECT * FROM docs").fetchall()
         return [self._to_dict(row) for row in rows]
 
     def get(self, doc_id: str) -> dict | None:
-        row = self.conn.execute("SELECT * FROM docs WHERE id=?", (doc_id,)).fetchone()
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM docs WHERE id=?", (doc_id,)).fetchone()
         return self._to_dict(row, include_body=True) if row else None
 
     @staticmethod
@@ -196,24 +233,27 @@ class Store:
 
     # ------------------------------------------------------------- 수정
 
+    def _write(self, sql: str, params: tuple) -> None:
+        """한 건 고치고 커밋한 뒤 바뀌었다고 알린다."""
+        with self._lock:
+            self.conn.execute(sql, params)
+            self.conn.commit()
+            self.rev += 1
+
     def set_done(self, doc_id: str, done: bool) -> None:
-        self.conn.execute("UPDATE docs SET done=? WHERE id=?", (1 if done else 0, doc_id))
-        self.conn.commit()
+        self._write("UPDATE docs SET done=? WHERE id=?", (1 if done else 0, doc_id))
 
     def set_category(self, doc_id: str, category: str) -> None:
-        self.conn.execute("UPDATE docs SET category_manual=? WHERE id=?", (category, doc_id))
-        self.conn.commit()
+        self._write("UPDATE docs SET category_manual=? WHERE id=?", (category, doc_id))
 
     def set_memo(self, doc_id: str, memo: str) -> None:
-        self.conn.execute("UPDATE docs SET memo=? WHERE id=?", (memo[:500], doc_id))
-        self.conn.commit()
+        self._write("UPDATE docs SET memo=? WHERE id=?", (memo[:500], doc_id))
 
     def relocate(self, doc_id: str, new_path: str, archived: str) -> None:
         """파일을 옮긴 뒤 기록의 위치를 따라가게 한다."""
         path = Path(new_path)
-        self.conn.execute("UPDATE docs SET path=?, filename=?, archived=? WHERE id=?",
-                          (str(path), path.name, archived, doc_id))
-        self.conn.commit()
+        self._write("UPDATE docs SET path=?, filename=?, archived=? WHERE id=?",
+                    (str(path), path.name, archived, doc_id))
 
     def set_deadline(self, doc_id: str, deadline: str | None) -> None:
         """손으로 정한 기한은 표시를 남긴다.
@@ -221,9 +261,8 @@ class Store:
         본문과 첨부를 묶을 때 가장 이른 기한을 쓰는데, 손으로 고친 값은
         그 계산에 밀리면 안 되기 때문이다.
         """
-        self.conn.execute("UPDATE docs SET deadline=?, deadline_edited=1 WHERE id=?",
-                          (deadline or None, doc_id))
-        self.conn.commit()
+        self._write("UPDATE docs SET deadline=?, deadline_edited=1 WHERE id=?",
+                    (deadline or None, doc_id))
 
 
 def _is_inside(path: Path, folder: Path) -> bool:

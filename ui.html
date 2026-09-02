@@ -314,11 +314,47 @@ let selected = null;
 const $ = id => document.getElementById(id);
 
 /* ------------------------------------------------------------- 통신 */
+const POLL_MS = 4000;
+let lastRev = -1;          // 지금 화면에 그려져 있는 내용의 번호
+
 async function call(url, body){
   const res = await fetch(url, body ? {
     method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
   } : undefined);
-  return res.json();
+  const data = await res.json();
+  // 응답이 상태를 담고 있으면 번호를 따라간다. 뒤늦게 도착한 옛 응답이
+  // 번호를 되돌리지 않도록 올라가기만 한다.
+  if (data && typeof data.rev === "number" && data.rev > lastRev) lastRev = data.rev;
+  return data;
+}
+
+/* 위젯이나 다른 탭에서 고친 것을 따라잡는다.
+   번호만 물어보고 달라졌을 때만 전체를 받아 온다. */
+function busy(){
+  if (document.hidden) return true;                 // 안 보고 있는 탭
+  const el = document.activeElement;
+  if (!el) return false;
+  // 검색창·메모·기한칸에 커서가 있으면 그대로 둔다. 다시 그리면 그 칸이
+  // 새로 만들어져 입력하던 내용과 커서가 날아간다.
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+}
+
+async function poll(){
+  if (!state || busy()) return;
+  let rev;
+  try { rev = (await (await fetch("/api/rev")).json()).rev; }
+  catch(e){ return; }                               // 서버가 잠깐 없다. 다음 차례에
+  if (typeof rev !== "number") return;
+  if (rev < lastRev) lastRev = -1;                  // 서버가 다시 떠서 번호가 되감겼다
+  if (rev === lastRev) return;
+
+  const seen = lastRev;
+  let fresh;
+  try { fresh = await call("/api/state"); }
+  catch(e){ return; }
+  if (typeof fresh.rev !== "number" || fresh.rev < seen) return;   // 지나간 응답은 버린다
+  state = fresh;
+  render();
 }
 function toast(text){
   const el = $("toast"); el.textContent = text; el.classList.add("show");
@@ -706,8 +742,13 @@ $("setfolder").onclick = async () => {
   state = res; toast("폴더를 바꿨습니다."); render();
 };
 document.addEventListener("keydown", e => { if (e.key === "Escape") closePanel(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 
-(async () => { state = await call("/api/state"); render(); })();
+(async () => {
+  state = await call("/api/state");
+  render();
+  setInterval(poll, POLL_MS);
+})();
 </script>
 </body>
 </html>

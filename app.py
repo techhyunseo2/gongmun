@@ -39,7 +39,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.3.8"
+VERSION = "1.4.0"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -237,6 +237,10 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/state":
             return self._json(self._state())
 
+        if route == "/api/rev":
+            # 화면이 몇 초마다 물어보는 자리. 내용이 바뀌었는지만 알려 준다.
+            return self._json({"rev": self.store.rev})
+
         if route == "/api/scan":
             force = query.get("force", ["0"])[0] == "1"
             report = self.store.scan(self.folder, force=force)
@@ -314,6 +318,8 @@ class Handler(BaseHTTPRequestHandler):
             save_config(config)
             Handler.base, Handler.folder = base, inbox
             self.store.scan(inbox)
+            # 훑어서 달라진 게 없더라도 위젯은 폴더줄을 다시 칠해야 한다.
+            self.store.touch()
         else:
             return self._json({"error": "알 수 없는 요청입니다."}, 404)
 
@@ -374,6 +380,7 @@ class Handler(BaseHTTPRequestHandler):
                 counts[doc["category"]] = counts.get(doc["category"], 0) + 1
         urgent = [d for d in docs if not d["done"] and d["days_left"] is not None and d["days_left"] <= 3]
         return {
+            "rev": self.store.rev,
             "folder": str(self.folder),
             "base": str(self.base),
             "inbox": str(self.folder),
