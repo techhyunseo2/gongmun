@@ -31,6 +31,7 @@ from app import (DB_PATH, PORT, VERSION, Handler, already_running, fold_groups, 
                  start_server)
 from classify import CATEGORIES, days_left  # noqa: E402
 from store import Store  # noqa: E402
+import changelog  # noqa: E402
 import updater  # noqa: E402
 
 PAPER = "#DDE1DC"
@@ -462,9 +463,59 @@ class Widget:
     def _finish_update(self, version: str) -> None:
         from tkinter import messagebox
         self.config["widget_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
+        # 다시 뜬 뒤에 무엇이 바뀌었는지 알려 주려고 적어 둔다. 지금 프로세스는
+        # 곧 죽으므로 새로 뜨는 쪽이 이 값을 보고 안내창을 띄운다.
+        self.config["updated_to"] = version
         save_config(self.config)
         messagebox.showinfo("공문 정리함", f"{version} 로 바꿨습니다.\n확인을 누르면 새로 시작합니다.")
         updater.restart()
+
+    def show_update_notice(self, version: str) -> None:
+        """갱신을 마치고 다시 뜬 뒤 "이렇게 바뀌었습니다" 를 보여 준다.
+
+        표시는 한 번만 하고 지운다. 변경내역.md 에 그 번호가 없으면
+        (적어 두는 것을 잊었으면) 조용히 넘어간다.
+        """
+        self.config.pop("updated_to", None)
+        save_config(self.config)
+
+        items = changelog.as_lines(version)
+        if not items:
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("공문 정리함")
+        window.configure(bg=PAPER)
+        window.resizable(False, False)
+        window.transient(self.root)
+
+        frame = tk.Frame(window, bg=PAPER)
+        frame.pack(fill="both", expand=True, padx=20, pady=18)
+
+        tk.Label(frame, text=f"{version} 으로 새로워졌습니다", font=self.f_title,
+                 bg=PAPER, fg=INK, anchor="w").pack(fill="x")
+        tk.Label(frame, text="이렇게 바뀌었습니다.", font=self.f_small, bg=PAPER,
+                 fg=SOFT, anchor="w").pack(fill="x", pady=(2, 12))
+
+        box = tk.Frame(frame, bg=CARD, highlightbackground=RULE, highlightthickness=1)
+        box.pack(fill="both", expand=True)
+        for item in items[:8]:
+            line = tk.Frame(box, bg=CARD)
+            line.pack(fill="x", padx=12, pady=(8, 0))
+            tk.Label(line, text="·", font=self.f_row, bg=CARD, fg=SEAL,
+                     anchor="n").pack(side="left", padx=(0, 6))
+            tk.Label(line, text=item, font=self.f_row, bg=CARD, fg=INK, anchor="w",
+                     justify="left", wraplength=360).pack(side="left", fill="x")
+        tk.Frame(box, bg=CARD, height=10).pack(fill="x")
+
+        buttons = tk.Frame(frame, bg=PAPER)
+        buttons.pack(fill="x", pady=(14, 0))
+        self._foot_button(buttons, "확인", lambda e=None: window.destroy()).pack(side="right")
+
+        window.update_idletasks()
+        window.geometry(f"+{self.root.winfo_x() - 90}+{self.root.winfo_y() + 40}")
+        window.attributes("-topmost", True)
+        window.grab_set()
 
     def _maybe_check_update(self) -> None:
         """너무 자주는 아니되, 껐다 켜면 다시 확인한다.
@@ -668,6 +719,9 @@ def main():
 
     config = load_config()
     is_first_run = not config.get("folder")
+    # 방금 갱신하고 다시 뜬 것인지. 실제로 그 버전으로 바뀌었을 때만 알린다.
+    updated_to = config.get("updated_to")
+    just_updated = bool(updated_to) and updated_to == VERSION
 
     if already_running(args.port) and not args.folder:
         from tkinter import messagebox
@@ -687,6 +741,13 @@ def main():
     widget = Widget(store, folder, port, base=base)
     if is_first_run:
         widget.root.after(700, lambda: first_run_guide(folder))
+    elif just_updated:
+        widget.root.after(700, lambda: widget.show_update_notice(VERSION))
+    elif updated_to:
+        # 갱신했다고 적혀 있는데 버전이 그대로다 — 교체가 안 된 것이다.
+        # 표시만 지운다. 갱신은 다음 확인 때 다시 권한다.
+        widget.config.pop("updated_to", None)
+        save_config(widget.config)
     widget.run()
 
 

@@ -12,9 +12,12 @@ a = Analysis(
     ["widget.py"],
     pathex=["."],
     binaries=[],
-    datas=[("ui.html", ".")],
+    # 변경내역.md 는 갱신 뒤 "이렇게 바뀌었습니다" 창이 읽는다. 빠뜨리면
+    # 창이 그냥 뜨지 않는다(오류는 안 난다) — 그래서 빠진 걸 알아채기 어렵다.
+    datas=[("ui.html", "."), ("변경내역.md", ".")],
     hiddenimports=["olefile", "pypdf", "openpyxl", "xlrd", "app", "store",
-                   "classify", "extract", "hwpx_view", "updater", "organize"],
+                   "classify", "extract", "hwpx_view", "updater", "organize",
+                   "changelog"],
     hookspath=[],
     runtime_hooks=[],
     # 쓰지 않는 큰 덩어리를 빼서 파일 크기를 줄인다

@@ -78,6 +78,14 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      # 설명글은 변경내역.md 에서 뽑는다. 갱신 전 미리보기와 갱신 뒤
+      # 안내창이 같은 글을 쓰게 하려는 것이다.
+      - name: 릴리스 설명글 만들기
+        run: |
+          python changelog.py --release ${{ steps.version.outputs.value }} release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "릴리스 설명글을 만들지 못했습니다" }
+          Get-Content release-notes.md
+
       # 같은 버전이면 릴리스를 덮어쓰기만 하고, 새 버전이면 새로 만든다.
       - name: 릴리스로 게시
         uses: softprops/action-gh-release@v2
@@ -85,10 +93,4 @@ jobs:
           tag_name: v${{ steps.version.outputs.value }}
           name: 공문 정리함 ${{ steps.version.outputs.value }}
           files: dist/*.exe
-          body: |
-            처음 쓰시는 분은 `gongmun-setup.exe` 를 받아 실행하세요.
-
-            **1.3.7 이하를 쓰고 계신 분은 한 번만 `gongmun-setup.exe` 로
-            다시 설치해 주세요.** 예전 버전은 자동 업데이트 파일 이름이
-            어긋나 스스로 갱신하지 못합니다. 한 번 새로 설치하면 그 뒤로는
-            프로그램이 알아서 갱신합니다.
+          body_path: release-notes.md
