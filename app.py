@@ -155,9 +155,15 @@ def reveal_in_os(path: Path) -> None:
     파일을 고르는 기능이 없는 환경에서는 폴더만 연다.
     """
     if sys.platform.startswith("win"):
-        # explorer 는 성공해도 종료 코드 1 을 내므로 결과를 보지 않는다.
-        # "/select," 와 경로는 반드시 한 덩어리로 넘겨야 한다.
-        subprocess.Popen(["explorer", f"/select,{path}"])
+        # 반드시 문자열 한 줄로 넘긴다. 리스트로 주면 파이썬이 공백이 든
+        # "/select,경로" 를 통째로 따옴표로 감싸 버리는데, 그러면 explorer
+        # 가 /select 를 스위치로 알아보지 못하고 엉뚱하게 문서 폴더를 연다.
+        # 따옴표는 경로에만 씌워야 한다.
+        #   맞음  : explorer /select,"C:\업무 폴더\공문\문서.hwp"
+        #   틀림  : explorer "/select,C:\업무 폴더\공문\문서.hwp"
+        # 윈도우 파일명에는 큰따옴표를 쓸 수 없으므로 이 조립은 안전하다.
+        # explorer 는 성공해도 종료 코드 1 을 내므로 결과는 보지 않는다.
+        subprocess.Popen(f'explorer /select,"{path}"')
     elif sys.platform == "darwin":
         subprocess.Popen(["open", "-R", str(path)])
     else:

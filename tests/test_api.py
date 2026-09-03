@@ -27,6 +27,48 @@ BODY = ("제목\n      파견교사 선발 계획 알림\n\n"
         "신청서를 2026. 9. 25.까지 제출바랍니다.\n")
 
 
+class RevealCommand(unittest.TestCase):
+    """탐색기에 넘기는 명령줄이 옳은지.
+
+    리스트로 넘기면 파이썬이 공백이 든 "/select,경로" 를 통째로 따옴표로
+    감싸고, 그러면 explorer 가 /select 를 스위치로 못 알아보고 엉뚱하게
+    문서 폴더를 연다. 실제 업무 폴더는 "OneDrive - 덕문중학교" 처럼
+    공백이 섞여 있어서 늘 실패했다.
+    """
+
+    SPACED = Path(r"C:\Users\나\OneDrive - 덕문중학교\1. 교무기획\공문"
+                  r"\[덕문중학교-4971] (본문) 계획.txt")
+
+    def _sent(self, path: Path, platform: str = "win32"):
+        sent = []
+        saved_popen, saved_platform = app.subprocess.Popen, app.sys.platform
+        app.subprocess.Popen = lambda args, **kw: sent.append(args)
+        app.sys.platform = platform
+        try:
+            app.reveal_in_os(path)
+        finally:
+            app.subprocess.Popen = saved_popen
+            app.sys.platform = saved_platform
+        return sent[0]
+
+    def test_switch_is_outside_the_quotes(self):
+        line = self._sent(self.SPACED)
+        self.assertIsInstance(line, str,
+                              "리스트로 넘기면 파이썬이 따옴표를 다시 씌운다")
+        self.assertTrue(line.startswith('explorer /select,"'),
+                        f"/select 가 따옴표 안에 들어갔습니다: {line}")
+        self.assertTrue(line.endswith('"'))
+        self.assertIn(str(self.SPACED), line)
+
+    def test_matches_the_documented_form(self):
+        simple = Path(r"C:\gongmun\a.txt")
+        self.assertEqual(self._sent(simple), f'explorer /select,"{simple}"')
+
+    def test_macos_reveals_rather_than_opens(self):
+        sent = self._sent(self.SPACED, platform="darwin")
+        self.assertEqual(sent[:2], ["open", "-R"])
+
+
 class Routes(unittest.TestCase):
 
     @classmethod
