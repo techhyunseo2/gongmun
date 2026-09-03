@@ -14,7 +14,13 @@ a = Analysis(
     binaries=[],
     # 변경내역.md 는 갱신 뒤 "이렇게 바뀌었습니다" 창이 읽는다. 빠뜨리면
     # 창이 그냥 뜨지 않는다(오류는 안 난다) — 그래서 빠진 걸 알아채기 어렵다.
-    datas=[("ui.html", "."), ("변경내역.md", ".")],
+    datas=[("ui.html", "."), ("변경내역.md", "."),
+           # 글꼴은 함께 넣어 배포한다. 외부 CDN 을 쓰면 실행할 때마다
+           # 이용자 IP 가 제3자에게 나가고, 학교망이 막으면 글꼴이 바뀐다.
+           # OFL 1.1 은 함께 배포할 때 라이선스 전문을 같이 두도록 요구한다.
+           ("assets/PretendardVariable.woff2", "assets"),
+           ("assets/Pretendard-OFL.txt", "assets"),
+           ("LICENSE", "."), ("THIRD-PARTY-NOTICES.txt", ".")],
     hiddenimports=["olefile", "pypdf", "openpyxl", "xlrd", "app", "store",
                    "classify", "extract", "hwpx_view", "updater", "organize",
                    "changelog"],

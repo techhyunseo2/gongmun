@@ -48,6 +48,16 @@ UPDATE_REPO = "techhyunseo2/gongmun"
 PORT = 8777
 PORT_TRIES = 12
 
+# 함께 배포하는 글꼴과 그 라이선스. 예전에는 글꼴을 외부 CDN 에서 받아
+# 썼는데, 실행할 때마다 이용자 IP 가 제3자에게 나가고 학교망이 CDN 을
+# 막으면 글꼴이 조용히 바뀌었다. 이제 프로그램 안에 넣어 배포한다.
+# Pretendard 는 SIL Open Font License 1.1 — 함께 배포하려면 라이선스
+# 전문을 같이 두어야 하므로 Pretendard-OFL.txt 도 같이 넣는다.
+ASSETS = {
+    "/assets/PretendardVariable.woff2": "font/woff2",
+    "/assets/Pretendard-OFL.txt": "text/plain; charset=utf-8",
+}
+
 
 # ------------------------------------------------------------------ 설정
 
@@ -217,11 +227,16 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------- helpers
 
     def _send(self, status: int, body: bytes, content_type: str, extra: dict | None = None):
+        # extra 로 같은 헤더를 덮어쓸 수 있게 사전으로 모았다가 한 번씩만 보낸다.
+        # (글꼴처럼 캐시해도 되는 것은 no-store 를 갈아끼운다)
+        headers = {
+            "Content-Type": content_type,
+            "Content-Length": str(len(body)),
+            "Cache-Control": "no-store",
+        }
+        headers.update(extra or {})
         self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        for key, value in (extra or {}).items():
+        for key, value in headers.items():
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
@@ -249,6 +264,17 @@ class Handler(BaseHTTPRequestHandler):
         if route in ("/", "/index.html"):
             html = (BASE_DIR / "ui.html").read_bytes()
             return self._send(200, html, "text/html; charset=utf-8")
+
+        # 함께 넣어 배포하는 파일들. 이름을 목록으로 못박아 두어 엉뚱한
+        # 경로를 읽어 가지 못하게 한다.
+        if route in ASSETS:
+            target = BASE_DIR / "assets" / route.rsplit("/", 1)[-1]
+            try:
+                body = target.read_bytes()
+            except OSError:
+                return self._send(404, b"not found", "text/plain; charset=utf-8")
+            return self._send(200, body, ASSETS[route],
+                              {"Cache-Control": "public, max-age=604800"})
 
         if route == "/api/state":
             return self._json(self._state())

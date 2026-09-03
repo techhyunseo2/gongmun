@@ -44,6 +44,11 @@ Type: files; Name: "{app}\{#AppExe}.old"
 [Files]
 Source: "dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "사용설명서.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
+; 라이선스 고지는 설치 폴더에서 바로 보이게 둔다. exe 안에도 들어 있지만
+; 그것만으로는 이용자가 열어 볼 수 없다.
+Source: "LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "assets\Pretendard-OFL.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

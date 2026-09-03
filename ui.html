@@ -4,9 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>공문 정리함</title>
-<link rel="preconnect" href="https://cdn.jsdelivr.net">
-<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" rel="stylesheet">
 <style>
+  /* 글꼴은 프로그램 안에 함께 넣어 배포한다. 예전에는 외부 CDN 에서
+     받아 썼는데 (1) 실행할 때마다 이용자 IP 가 제3자에게 나가고
+     (2) 학교망이 CDN 을 막으면 글꼴이 조용히 바뀌었다.
+     Pretendard, SIL Open Font License 1.1 — 전문은 /assets/Pretendard-OFL.txt
+     또는 프로그램을 설치한 폴더의 THIRD-PARTY-NOTICES.txt 참고. */
+  @font-face{
+    font-family:"Pretendard Variable";
+    font-weight:45 920;
+    font-style:normal;
+    font-display:swap;
+    src:local("Pretendard Variable"),
+        url("/assets/PretendardVariable.woff2") format("woff2-variations");
+  }
   :root{
     --paper:#DDE1DC;
     --card:#FBFBF8;
