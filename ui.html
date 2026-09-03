@@ -130,6 +130,10 @@
     width:15px; height:15px; border:1px solid var(--rule); border-radius:2px;
     background:var(--paper); align-self:center; position:relative; flex:none;
   }
+  /* 보이는 네모는 15px 그대로 두고 누르는 자리만 23px 로 넓힌다.
+     좁으면 옆을 눌러 미리보기가 열려 버려서, 여러 건을 고를 때 번거롭다.
+     ::after 는 체크 표시가 쓰므로 여기서는 ::before 를 쓴다. */
+  .pick::before{content:"";position:absolute;inset:-4px}
   .row:hover .pick{border-color:var(--ink-soft)}
   .pick[aria-checked="true"]{background:var(--ink);border-color:var(--ink)}
   .pick[aria-checked="true"]::after{
@@ -172,10 +176,13 @@
   .empty b{display:block;color:var(--ink);font-weight:600;margin-bottom:6px;font-size:15px}
 
   /* ---------------------------------------------------------- 상세 */
-  .scrim{position:fixed;inset:0;background:rgba(22,32,27,.28);opacity:0;pointer-events:none;transition:opacity .18s}
+  /* 겹침 순서. 고른 건수를 알리는 검은 막대(.picked, 5)보다 미리보기
+     패널이 위에 와야 한다. 공문 내용을 보면서 고르는 흐름이라, 막대가
+     내용을 가리면 읽을 수가 없다. 토스트는 패널 위에서도 보여야 한다. */
+  .scrim{position:fixed;inset:0;z-index:10;background:rgba(22,32,27,.28);opacity:0;pointer-events:none;transition:opacity .18s}
   .scrim.open{opacity:1;pointer-events:auto}
   aside{
-    position:fixed; top:0; right:0; height:100%; width:min(480px,92vw);
+    position:fixed; top:0; right:0; height:100%; width:min(480px,92vw); z-index:11;
     background:var(--card); border-left:1px solid var(--rule); box-shadow:var(--shadow);
     transform:translateX(100%); transition:transform .22s ease; overflow-y:auto; padding:26px 28px 60px;
   }
@@ -259,7 +266,7 @@
   .warnbox{border:1px solid var(--seal);border-radius:3px;padding:10px 12px;font-size:13px;color:var(--seal-deep)}
 
   #toast{
-    position:fixed; left:50%; bottom:28px; transform:translate(-50%,14px);
+    position:fixed; left:50%; bottom:28px; z-index:20; transform:translate(-50%,14px);
     background:var(--ink); color:var(--card); padding:9px 18px; border-radius:3px;
     font-size:13.5px; opacity:0; pointer-events:none; transition:opacity .16s,transform .16s;
   }
