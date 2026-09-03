@@ -39,7 +39,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -412,11 +412,13 @@ def fold_groups(docs: list[dict]) -> list[dict]:
         entry["group_key"] = key
         entry["members"] = [
             {"id": m["id"], "filename": m["filename"], "role": m.get("role") or "",
-             "error": m.get("error") or "", "path": m.get("path") or ""}
+             "error": m.get("error") or "", "path": m.get("path") or "",
+             "readable": bool(m.get("readable", True))}
             for m in members
         ]
-        entry["attachments"] = sum(1 for m in members
-                                   if m.get("role") == organize.ROLE_ATTACH)
+        # 대표 문서를 뺀 나머지가 첨부다. 역할 표시가 없는 파일(zip, png 처럼
+        # 이름에 "(첨부)" 가 안 붙어 오는 것)도 세야 개수가 맞는다.
+        entry["attachments"] = max(len(members) - 1, 0)
         entry["paths"] = [m["path"] for m in members]
         entry["archived"] = next((m.get("archived") for m in members if m.get("archived")), "")
 
@@ -443,13 +445,20 @@ def fold_groups(docs: list[dict]) -> list[dict]:
 
 
 def _pick_lead(members: list[dict]) -> dict:
-    """묶음을 대표할 문서. 본문이 있으면 본문, 없으면 판단이 가장 또렷한 것."""
-    for member in members:
+    """묶음을 대표할 문서. 본문이 있으면 본문, 없으면 판단이 가장 또렷한 것.
+
+    읽지 못하는 파일(zip, png…)은 대표로 세우지 않는다. 제목도 기한도
+    없어서 목록에 이름만 덩그러니 남기 때문이다. 묶음이 통째로 그런
+    파일뿐일 때만 어쩔 수 없이 그중 하나를 쓴다.
+    """
+    readable = [m for m in members if m.get("readable", True)]
+    for member in readable or members:
         if member.get("role") == organize.ROLE_BODY:
             return member
     ranking = {"높음": 0, "보통": 1, "낮음": 2}
-    return min(members, key=lambda m: (ranking.get(m.get("confidence"), 3),
-                                       not m.get("deadline")))
+    return min(readable or members,
+               key=lambda m: (ranking.get(m.get("confidence"), 3),
+                              not m.get("deadline")))
 
 
 def _month_of(group: dict) -> int | None:

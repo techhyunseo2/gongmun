@@ -231,6 +231,7 @@
   .filerow .tag.body{background:var(--slate)}
   .filerow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .filerow .bad{color:var(--seal);font-size:11.5px;margin-left:auto;flex:none}
+  .filerow .plain{color:var(--ink-soft);font-size:11.5px;margin-left:auto;flex:none}
   .body .hx-sheet{
     font-weight:600; font-size:12.5px; color:var(--ink); margin:14px 0 4px;
     padding-bottom:3px; border-bottom:1px solid var(--rule);
@@ -570,16 +571,26 @@ function _filelist(members, doc){
   const rows = members.map(m => {
     const tag = m.role === "본문" ? `<span class="tag body">본문</span>`
               : m.role ? `<span class="tag">${esc(m.role)}</span>` : "";
-    const bad = m.error ? `<span class="bad">못 읽음</span>` : "";
+    // 읽지 못한 것과, 읽을 필요가 없는 것(zip·png 같은 첨부)은 다르다.
+    // 뒤엣것에 빨간 "못 읽음" 을 달면 뭔가 잘못된 줄 아신다.
+    const note = m.error ? `<span class="bad">못 읽음</span>`
+               : m.readable === false ? `<span class="plain">미리보기 없음</span>` : "";
     return `<button class="filerow" data-file="${m.id}" aria-pressed="${viewingFile===m.id}">
-      ${tag}<span class="nm">${esc(m.filename)}</span>${bad}</button>`;
+      ${tag}<span class="nm">${esc(m.filename)}</span>${note}</button>`;
   }).join("");
   return `<div class="field"><label><span>이 공문에 딸린 문서 ${members.length}개</span><span class="hint">눌러서 미리보기</span></label>
     <div class="files">${rows}</div></div>`;
 }
 
 function _preview(doc, label){
-  if (!doc.body && !doc.body_html) return "";
+  if (!doc.body && !doc.body_html){
+    if (doc.readable === false){
+      return `<div class="field"><label><span>미리보기</span></label>
+        <div class="empty">이 형식은 프로그램이 열어 보지 못합니다.
+        아래 "보고 있는 파일 열기" 로 여시면 됩니다.</div></div>`;
+    }
+    return "";
+  }
   const hasForm = !!doc.body_html;
   const formatted = hasForm && !plainView;
   const inner = formatted ? doc.body_html : esc((doc.body||"").slice(0,4000));

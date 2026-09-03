@@ -19,6 +19,14 @@ sys.path.insert(0, str(ROOT))
 
 import changelog  # noqa: E402
 
+
+def app_version() -> str:
+    """app.py 의 VERSION. 테스트가 버전을 손으로 적으면 올릴 때마다 깨진다."""
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    found = re.search(r'^VERSION\s*=\s*"([^"]+)"', source, re.MULTILINE)
+    assert found, "app.py 에서 VERSION 을 찾지 못했습니다"
+    return found.group(1)
+
 SAMPLE = """# 변경 내역
 
 머리말은 무시한다.
@@ -94,13 +102,13 @@ class CommandLine(unittest.TestCase):
     def test_release_mode_survives_narrow_stdout(self):
         with tempfile.TemporaryDirectory() as folder:
             out = Path(folder) / "release-notes.md"
-            done = self._run("--release", "1.4.1", str(out))
+            done = self._run("--release", app_version(), str(out))
             self.assertEqual(done.returncode, 0,
                              f"stderr: {done.stderr.decode('utf-8', 'replace')}")
             self.assertIn("바뀐 점", out.read_text(encoding="utf-8"))
 
     def test_print_mode_survives_narrow_stdout(self):
-        done = self._run("1.4.1")
+        done = self._run(app_version())
         self.assertEqual(done.returncode, 0,
                          f"stderr: {done.stderr.decode('utf-8', 'replace')}")
         self.assertTrue(done.stdout.strip(), "바뀐 점이 출력되지 않았습니다")
@@ -112,15 +120,9 @@ class CommandLine(unittest.TestCase):
 class ShippingChecklist(unittest.TestCase):
     """올릴 때 빠뜨리기 쉬운 것들. 빠져도 오류가 안 나서 알아채기 어렵다."""
 
-    def _app_version(self) -> str:
-        source = (ROOT / "app.py").read_text(encoding="utf-8")
-        found = re.search(r'^VERSION\s*=\s*"([^"]+)"', source, re.MULTILINE)
-        self.assertIsNotNone(found, "app.py 에서 VERSION 을 찾지 못했습니다")
-        return found.group(1)
-
     def test_current_version_has_notes(self):
         """지금 VERSION 이 변경내역.md 에 있어야 갱신 뒤 안내창이 뜬다."""
-        version = self._app_version()
+        version = app_version()
         self.assertTrue(
             changelog.as_lines(version),
             f"변경내역.md 에 '## {version}' 을 적어 주세요. "

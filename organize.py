@@ -20,8 +20,6 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from extract import SUPPORTED
-
 # 접수번호: 기관 이름 뒤에 붙임표와 숫자. 괄호가 밑줄로 바뀐 경우도 받는다.
 _RECEIPT = re.compile(
     r"^[\[\(\{_\s]*"
@@ -159,12 +157,16 @@ def plan(folder: Path) -> tuple[list[Group], list[Path]]:
     """폴더 바로 아래 흩어져 있는 파일들을 묶음별로 나눈다.
 
     이미 하위 폴더에 들어가 있는 파일은 건드리지 않는다.
+
+    형식은 가리지 않는다. zip 이나 png 처럼 내용을 읽지 못하는 첨부도
+    이름 앞에 같은 접수번호가 붙어 내려오므로 같은 폴더로 들어가야 한다.
+    접수번호가 없는 파일은 loose 로 빠져 제자리에 그대로 남는다.
     """
     groups: dict[str, Group] = {}
     loose: list[Path] = []
 
     for path in sorted(folder.glob("*")):
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED:
+        if not path.is_file():
             continue
         if path.name.startswith(("~$", ".")):
             continue

@@ -15,7 +15,16 @@ from pathlib import Path
 
 from classify import analyze
 from extract import SUPPORTED, ExtractError, extract_rich
-from organize import ROLE_BODY, group_key
+from organize import ROLE_BODY, group_key, parse_name
+
+# 읽지 못하는 첨부(zip, png, 한글 이외의 형식…)도 같은 공문에 딸린 것이면
+# 함께 기록해 둔다. 그래야 첨부 개수가 맞고, 폴더 정리와 완료 정리 때
+# 같이 따라 움직인다. 다만 내용은 분석하지 않는다.
+#
+# 큰 파일이 섞일 수 있어(동영상, 큰 압축) id 를 만들 때 앞부분만 읽는다.
+# 읽을 수 있는 형식은 예전과 똑같이 통째로 해시한다 — 규칙을 바꾸면 id 가
+# 달라져서 이미 쌓인 처리 상태와 메모가 통째로 날아간다.
+COMPANION_HASH_BYTES = 4 * 1024 * 1024
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs (
@@ -42,6 +51,7 @@ CREATE TABLE IF NOT EXISTS docs (
     receipt_number  TEXT DEFAULT '',
     archived        TEXT DEFAULT '',
     deadline_edited INTEGER DEFAULT 0,
+    readable        INTEGER DEFAULT 1,
     done            INTEGER DEFAULT 0,
     memo            TEXT DEFAULT '',
     error           TEXT DEFAULT ''
@@ -87,7 +97,8 @@ class Store:
                                    ("role", "TEXT DEFAULT ''"),
                                    ("receipt_number", "TEXT DEFAULT ''"),
                                    ("archived", "TEXT DEFAULT ''"),
-                                   ("deadline_edited", "INTEGER DEFAULT 0")):
+                                   ("deadline_edited", "INTEGER DEFAULT 0"),
+                                   ("readable", "INTEGER DEFAULT 1")):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {definition}")
 
@@ -106,12 +117,22 @@ class Store:
                  for row in self.conn.execute("SELECT id, path FROM docs")}
         seen: set[str] = set()
 
-        for path in sorted(folder.rglob("*")):
-            if not path.is_file() or path.suffix.lower() not in SUPPORTED:
-                continue
-            if path.name.startswith("~$") or path.name.startswith("."):
-                continue
-            doc_id = _file_id(path)
+        files = [p for p in sorted(folder.rglob("*"))
+                 if p.is_file() and not p.name.startswith(("~$", "."))]
+        # 공문 폴더 하나에 이름이 제각각인 파일이 섞여 있어도 한 묶음으로
+        # 보이게, 폴더마다 대표 접수번호를 미리 모아 둔다. 인박스 바로
+        # 아래는 서로 다른 공문이 섞여 있는 자리라 이 힌트를 쓰지 않는다.
+        folder_receipt: dict[Path, str] = {}
+        for path in files:
+            found = parse_name(path.name)[0]
+            if found and path.parent != folder:
+                folder_receipt.setdefault(path.parent, found)
+
+        for path in files:
+            readable = path.suffix.lower() in SUPPORTED
+            if not readable and not _belongs_to_a_group(path, folder):
+                continue          # 우리 공문과 이어 붙일 수 없는 남의 파일
+            doc_id = _file_id(path, None if readable else COMPANION_HASH_BYTES)
             seen.add(doc_id)
             if doc_id in known and not force:
                 # 자리나 이름이 그대로면 아무것도 쓰지 않는다. 쓸데없이 써 두면
@@ -122,22 +143,25 @@ class Store:
                     moved += 1
                 skipped += 1
                 continue
-            try:
-                body, body_html = extract_rich(path)
-                result = analyze(path.stem, body)
-                error = ""
-            except (ExtractError, Exception) as exc:  # noqa: BLE001
-                body, body_html, error = "", "", str(exc)[:200]
-                result = {
-                    "title": path.stem, "sender": "", "doc_number": "",
-                    "receipt_number": "", "category": "other", "confidence": "낮음",
-                    "deadline": None, "deadline_context": "", "event_date": None,
-                    "all_dates": [], "summary": "",
-                }
-                failed += 1
-            result["group_key"], result["role"] = group_key(
-                path, folder, result.get("receipt_number", ""))
-            self._upsert(doc_id, path, result, body, body_html, error)
+            if readable:
+                try:
+                    body, body_html = extract_rich(path)
+                    result = analyze(path.stem, body)
+                    error = ""
+                except (ExtractError, Exception) as exc:  # noqa: BLE001
+                    body, body_html, error = "", "", str(exc)[:200]
+                    result = _blank(path)
+                    failed += 1
+            else:
+                # 읽지 않는다. 못 읽은 것이 아니라 읽을 필요가 없는 것이므로
+                # error 를 비워 둔다 — 화면에 빨간 "못 읽음" 이 뜨면 안 된다.
+                body, body_html, error = "", "", ""
+                result = _blank(path)
+                result["receipt_number"] = parse_name(path.name)[0]
+
+            hint = result.get("receipt_number") or folder_receipt.get(path.parent, "")
+            result["group_key"], result["role"] = group_key(path, folder, hint)
+            self._upsert(doc_id, path, result, body, body_html, error, readable)
             if not error:
                 added += 1
 
@@ -149,14 +173,14 @@ class Store:
                 "removed": removed, "moved": moved}
 
     def _upsert(self, doc_id: str, path: Path, result: dict, body: str,
-                body_html: str, error: str) -> None:
+                body_html: str, error: str, readable: bool = True) -> None:
         stat = path.stat()
         self.conn.execute(
             """INSERT INTO docs (id, path, filename, modified, scanned_at, title, sender,
                                  doc_number, category, confidence, deadline, deadline_context,
                                  event_date, all_dates, summary, body, body_html,
-                                 group_key, role, receipt_number, error)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                 group_key, role, receipt_number, error, readable)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  path=excluded.path, filename=excluded.filename, scanned_at=excluded.scanned_at,
                  title=excluded.title, sender=excluded.sender, doc_number=excluded.doc_number,
@@ -168,7 +192,7 @@ class Store:
                  summary=excluded.summary, body=excluded.body,
                  body_html=excluded.body_html, group_key=excluded.group_key,
                  role=excluded.role, receipt_number=excluded.receipt_number,
-                 error=excluded.error""",
+                 error=excluded.error, readable=excluded.readable""",
             (
                 doc_id, str(path), path.name,
                 date.fromtimestamp(stat.st_mtime).isoformat(),
@@ -179,7 +203,7 @@ class Store:
                 json.dumps(result["all_dates"], ensure_ascii=False),
                 result["summary"], body[:20000], body_html[:120000],
                 result.get("group_key", ""), result.get("role", ""),
-                result.get("receipt_number", ""), error,
+                result.get("receipt_number", ""), error, 1 if readable else 0,
             ),
         )
 
@@ -224,6 +248,7 @@ class Store:
         data = dict(row)
         data["all_dates"] = json.loads(data.get("all_dates") or "[]")
         data["done"] = bool(data["done"])
+        data["readable"] = bool(data.get("readable", 1))
         data["category"] = data["category_manual"] or data["category"]
         data["edited"] = bool(data["category_manual"])
         if not include_body:
@@ -265,6 +290,32 @@ class Store:
                     (deadline or None, doc_id))
 
 
+def _blank(path: Path) -> dict:
+    """분석하지 않은 파일의 빈 분석 결과."""
+    return {
+        "title": path.stem, "sender": "", "doc_number": "",
+        "receipt_number": "", "category": "other", "confidence": "낮음",
+        "deadline": None, "deadline_context": "", "event_date": None,
+        "all_dates": [], "summary": "",
+    }
+
+
+def _belongs_to_a_group(path: Path, folder: Path) -> bool:
+    """읽지 못하는 파일을 데리고 다닐지 정한다.
+
+    파일 이름에 접수번호가 있거나(같이 내려받은 첨부), 이미 공문 폴더 안에
+    들어가 있으면(폴더 정리를 마친 것) 그 공문에 딸린 파일로 본다.
+    공문 폴더 바로 아래에 접수번호도 없이 놓인 그림 같은 것은 남의 파일일
+    수 있으므로 건드리지 않는다.
+    """
+    if parse_name(path.name)[0]:
+        return True
+    try:
+        return len(path.resolve().relative_to(folder.resolve()).parts) > 1
+    except (ValueError, OSError):
+        return False
+
+
 def _is_inside(path: Path, folder: Path) -> bool:
     try:
         path.resolve().relative_to(folder.resolve())
@@ -273,9 +324,22 @@ def _is_inside(path: Path, folder: Path) -> bool:
         return False
 
 
-def _file_id(path: Path) -> str:
+def _file_id(path: Path, limit: int | None = None) -> str:
+    """파일 내용으로 만드는 id. 옮기거나 이름을 바꿔도 그대로다.
+
+    limit 을 주면 그만큼만 읽고 파일 크기를 섞는다. 동영상이나 큰 압축이
+    섞여 있을 때 훑을 때마다 통째로 읽지 않기 위해서다. 읽을 수 있는
+    형식에는 limit 을 주지 않는다 — 규칙이 달라지면 id 가 바뀌어 이미
+    쌓인 처리 상태와 메모를 잃는다.
+    """
     digest = hashlib.sha1()
+    read = 0
     with path.open("rb") as handle:
         while chunk := handle.read(262144):
             digest.update(chunk)
+            read += len(chunk)
+            if limit is not None and read >= limit:
+                break
+    if limit is not None:
+        digest.update(str(path.stat().st_size).encode())
     return digest.hexdigest()[:16]
