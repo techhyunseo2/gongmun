@@ -43,6 +43,33 @@ class Opacity(unittest.TestCase):
                                 "이보다 흐리면 위젯이 사실상 안 보인다")
 
 
+class Wording(unittest.TestCase):
+    """사용자가 직접 정한 문구. 업데이트 때 되돌리지 말 것.
+
+    슬라이더 창 머리말은 사용자가 커밋 6499304 에서 손수 고친 것이다.
+    "더 나은 표현" 으로 바꾸지 말고 그대로 둔다. 바꿔야 할 사정이 생기면
+    사용자에게 먼저 물어본다.
+    """
+
+    HEADING = "최대 50%까지 투명도를 조절할 수 있습니다"
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+
+    def test_slider_heading_is_untouched(self):
+        self.assertIn(
+            f'text="{self.HEADING}"', self.source,
+            "슬라이더 머리말은 사용자가 정한 문구입니다. "
+            f'"{self.HEADING}" 그대로 두세요.')
+
+    def test_heading_matches_the_actual_floor(self):
+        """문구의 50% 와 OPACITY_MIN 이 어긋나면 거짓말이 된다."""
+        floor = round(widget.OPACITY_MIN * 100)
+        self.assertIn(f"{floor}%", self.HEADING,
+                      f"OPACITY_MIN 을 {floor}% 로 바꿨으면 머리말도 함께 "
+                      "고치고, 이 검사의 HEADING 도 같이 고쳐 주세요.")
+
+
 class Menu(unittest.TestCase):
 
     def setUp(self):
