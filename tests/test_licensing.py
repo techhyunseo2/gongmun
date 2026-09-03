@@ -18,6 +18,29 @@ sys.path.insert(0, str(ROOT))
 import app  # noqa: E402
 
 
+def tracked_files():
+    """저장소가 추적 중인 파일 목록. git 이 없으면 검사를 건너뛴다."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(ROOT), "-c", "core.quotepath=false", "ls-files"],
+            capture_output=True, check=True, text=True, encoding="utf-8",
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise unittest.SkipTest(f"git 을 쓸 수 없어 건너뜁니다: {exc}")
+    return [name for name in done.stdout.splitlines() if name]
+
+
+def tracked_text():
+    """추적 중인 텍스트 파일을 (이름, 내용) 으로 읽어 준다."""
+    for name in tracked_files():
+        if Path(name).suffix.lower() in {".woff2", ".ico"}:
+            continue
+        try:
+            yield name, (ROOT / name).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+
+
 class Files(unittest.TestCase):
 
     def test_license_exists_and_is_mit(self):
@@ -125,19 +148,9 @@ class NoRealDocuments(unittest.TestCase):
         ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx",
     }
 
-    def _tracked_files(self):
-        try:
-            done = subprocess.run(
-                ["git", "-C", str(ROOT), "ls-files", "-z"],
-                capture_output=True, check=True,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:  # git 이 없는 환경
-            self.skipTest(f"git 을 쓸 수 없어 건너뜁니다: {exc}")
-        return [n for n in done.stdout.decode("utf-8").split("\0") if n]
-
     def test_no_documents_are_tracked(self):
         found = sorted(
-            name for name in self._tracked_files()
+            name for name in tracked_files()
             if Path(name).suffix.lower() in self.DOCUMENTS
         )
         self.assertEqual(found, [], (
@@ -149,6 +162,34 @@ class NoRealDocuments(unittest.TestCase):
         """`공문/` 을 만들어 놓고 시험하다 다시 커밋하는 일을 막는다."""
         text = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("공문/", text, ".gitignore 에 `공문/` 이 없습니다.")
+
+
+class NoIdentifyingInfo(unittest.TestCase):
+    """소스에 실제 학교 이름이 남아 있으면 안 된다.
+
+    공모 요강은 지정 서식을 뺀 제출자료에 "참가자를 식별할 수 있는
+    정보" 를 넣지 못하게 한다. 예시로 쓰던 접수번호에 근무 학교 이름이
+    그대로 들어가 있었다(README·사용설명서·테스트 등 15곳).
+
+    학교 이름을 여기 적으면 그 자체가 소스에 남는다. 그래서 금지어
+    목록이 아니라 반대로 검사한다 — 학교 이름꼴을 전부 찾아내 허용된
+    가상 이름인지만 본다. 진짜 이름은 무엇이 되든 걸린다.
+    """
+
+    SCHOOL = re.compile(r"[가-힣]{1,10}(?:초등학교|중학교|고등학교)")
+    ALLOWED = {"예시중학교"}
+
+    def test_only_placeholder_school_names_appear(self):
+        found = {}
+        for name, text in tracked_text():
+            for school in self.SCHOOL.findall(text):
+                if school not in self.ALLOWED:
+                    found.setdefault(school, set()).add(name)
+        self.assertEqual(found, {}, (
+            "실제 학교 이름으로 보이는 것이 있습니다. 예시는 가상 이름"
+            f"({', '.join(sorted(self.ALLOWED))})으로 적으세요: "
+            + "; ".join(f"{k} → {sorted(v)}" for k, v in sorted(found.items()))
+        ))
 
 
 if __name__ == "__main__":

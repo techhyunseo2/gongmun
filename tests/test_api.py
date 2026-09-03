@@ -32,12 +32,12 @@ class RevealCommand(unittest.TestCase):
 
     리스트로 넘기면 파이썬이 공백이 든 "/select,경로" 를 통째로 따옴표로
     감싸고, 그러면 explorer 가 /select 를 스위치로 못 알아보고 엉뚱하게
-    문서 폴더를 연다. 실제 업무 폴더는 "OneDrive - 덕문중학교" 처럼
+    문서 폴더를 연다. 실제 업무 폴더는 "OneDrive - 예시중학교" 처럼
     공백이 섞여 있어서 늘 실패했다.
     """
 
-    SPACED = Path(r"C:\Users\나\OneDrive - 덕문중학교\1. 교무기획\공문"
-                  r"\[덕문중학교-4971] (본문) 계획.txt")
+    SPACED = Path(r"C:\Users\나\OneDrive - 예시중학교\1. 교무기획\공문"
+                  r"\[예시중학교-4971] (본문) 계획.txt")
 
     def _sent(self, path: Path, platform: str = "win32"):
         sent = []
@@ -95,7 +95,7 @@ class Routes(unittest.TestCase):
         cls.base = cls.tmp / "1. 교무기획"
         cls.inbox = cls.base / "공문"
         cls.inbox.mkdir(parents=True)
-        r = "[덕문중학교-4971]"
+        r = "[예시중학교-4971]"
         (cls.inbox / f"{r} (본문) 계획 알림.txt").write_text(BODY, encoding="utf-8")
         (cls.inbox / f"{r} (첨부) 서식.zip").write_bytes(b"PK\x03\x04" + b"\0" * 3000)
         cls.store = Store(cls.tmp / "t.db")

@@ -39,7 +39,7 @@ class MixedFolder(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _fill(self):
-        r = "[덕문중학교-4971]"
+        r = "[예시중학교-4971]"
         (self.inbox / f"{r} (본문) 파견교사 선발 계획 알림.txt").write_text(BODY, encoding="utf-8")
         (self.inbox / f"{r} (첨부) 제출서식.zip").write_bytes(b"PK\x03\x04" + b"\0" * 4000)
         (self.inbox / f"{r} 안내 포스터.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 900)
@@ -78,8 +78,8 @@ class Recording(MixedFolder):
         self._fill()
         self.store.scan(self.inbox)
         by_name = {d["filename"]: d for d in self.store.all_docs()}
-        self.assertIn("[덕문중학교-4971] (첨부) 제출서식.zip", by_name)
-        zipped = by_name["[덕문중학교-4971] (첨부) 제출서식.zip"]
+        self.assertIn("[예시중학교-4971] (첨부) 제출서식.zip", by_name)
+        zipped = by_name["[예시중학교-4971] (첨부) 제출서식.zip"]
         self.assertFalse(zipped["readable"])
         self.assertEqual(zipped["error"], "",
                          "읽을 필요가 없는 것이지 못 읽은 것이 아닙니다")
@@ -122,7 +122,7 @@ class Recording(MixedFolder):
     def test_large_companion_is_not_read_whole(self):
         """큰 첨부까지 통째로 해시하면 훑을 때마다 디스크를 긁는다."""
         import store as store_module
-        big = self.inbox / "[덕문중학교-4971] (첨부) 큰파일.zip"
+        big = self.inbox / "[예시중학교-4971] (첨부) 큰파일.zip"
         big.write_bytes(b"A" * (store_module.COMPANION_HASH_BYTES + 2048))
         first = store_module._file_id(big, store_module.COMPANION_HASH_BYTES)
         # 뒷부분만 다른 파일은 크기가 같으면 같은 id 가 될 수 있지만,
@@ -136,7 +136,7 @@ class Recording(MixedFolder):
         import hashlib
 
         import store as store_module
-        path = self.inbox / "[덕문중학교-4971] (본문) 계획.txt"
+        path = self.inbox / "[예시중학교-4971] (본문) 계획.txt"
         path.write_text(BODY, encoding="utf-8")
         expected = hashlib.sha1(path.read_bytes()).hexdigest()[:16]
         self.assertEqual(store_module._file_id(path), expected)
