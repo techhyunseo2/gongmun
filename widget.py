@@ -434,7 +434,7 @@ class Widget:
         frame = tk.Frame(window, bg=PAPER)
         frame.pack(fill="both", expand=True, padx=18, pady=16)
 
-        tk.Label(frame, text="위젯을 얼마나 진하게 보여 줄까요", font=self.f_head,
+        tk.Label(frame, text="최대 50%까지 투명도를 조절할 수 있습니다", font=self.f_head,
                  bg=PAPER, fg=INK, anchor="w").pack(fill="x")
         readout = tk.Label(frame, font=self.f_small, bg=PAPER, fg=SOFT, anchor="w")
         readout.pack(fill="x", pady=(2, 6))
