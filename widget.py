@@ -51,6 +51,7 @@ WIDTH, ROWS = 320, 7
 REFRESH_MINUTES = 10        # 폴더에 새 파일이 들어왔는지 훑는 주기 (디스크를 읽는다)
 LIVE_SECONDS = 2.5          # 브라우저에서 고친 게 있는지 보는 주기 (번호만 본다)
 UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시 본다
+OPACITY_MIN = 0.5           # 더 흐려지면 위젯을 찾지 못해 되돌릴 길이 없어진다
 
 
 class Widget:
@@ -70,7 +71,7 @@ class Widget:
         self.root.overrideredirect(True)
         self.root.configure(bg=RULE)
         self.root.attributes("-topmost", bool(self.config.get("on_top", True)))
-        self.root.attributes("-alpha", float(self.config.get("opacity", 0.96)))
+        self.root.attributes("-alpha", clamp_opacity(self.config.get("opacity", 0.96)))
 
         self._pick_fonts()
         self._build()
@@ -369,8 +370,7 @@ class Widget:
         on_top = bool(self.config.get("on_top", True))
         menu.add_command(label="항상 위에 두기 " + ("끄기" if on_top else "켜기"),
                          command=self._toggle_top)
-        for value, label in ((1.0, "선명하게"), (0.92, "조금 투명하게"), (0.8, "많이 투명하게")):
-            menu.add_command(label=label, command=lambda v=value: self._set_opacity(v))
+        menu.add_command(label="투명도 조절", command=self.show_opacity)
         menu.add_separator()
         menu.add_command(label="공문 폴더 확인", command=self.show_folder)
         menu.add_command(label="공문 폴더 열기", command=lambda: open_in_os(self.folder))
@@ -411,10 +411,77 @@ class Widget:
         save_config(self.config)
         self.root.attributes("-topmost", value)
 
-    def _set_opacity(self, value: float):
-        self.config["opacity"] = value
-        save_config(self.config)
+    def _set_opacity(self, value: float, remember: bool = True):
+        """창을 얼마나 비쳐 보이게 할지 정한다. 0.5 아래로는 내리지 않는다.
+
+        너무 흐려지면 위젯이 어디 있는지 못 찾고 오른쪽 버튼도 누르지 못해
+        되돌릴 길이 없어진다.
+        """
+        value = clamp_opacity(value)
         self.root.attributes("-alpha", value)
+        if remember:
+            self.config["opacity"] = value
+            save_config(self.config)
+
+    def show_opacity(self):
+        """투명도를 손잡이로 조절한다. 끄는 동안 바로바로 반영된다."""
+        window = tk.Toplevel(self.root)
+        window.title("투명도")
+        window.configure(bg=PAPER)
+        window.resizable(False, False)
+        window.transient(self.root)
+
+        frame = tk.Frame(window, bg=PAPER)
+        frame.pack(fill="both", expand=True, padx=18, pady=16)
+
+        tk.Label(frame, text="위젯을 얼마나 진하게 보여 줄까요", font=self.f_head,
+                 bg=PAPER, fg=INK, anchor="w").pack(fill="x")
+        readout = tk.Label(frame, font=self.f_small, bg=PAPER, fg=SOFT, anchor="w")
+        readout.pack(fill="x", pady=(2, 6))
+
+        start = round(float(self.config.get("opacity", 0.96)) * 100)
+        slider = tk.Scale(
+            frame, from_=int(OPACITY_MIN * 100), to=100, orient="horizontal",
+            showvalue=False, length=280, bg=PAPER, fg=INK, troughcolor=CARD,
+            highlightthickness=0, bd=0, sliderrelief="flat", activebackground=SLATE,
+        )
+        slider.set(max(int(OPACITY_MIN * 100), min(100, start)))
+        slider.pack(fill="x")
+
+        def slide(raw):
+            percent = int(float(raw))
+            # 끄는 동안에는 화면만 바꾸고, 손을 뗄 때 한 번만 저장한다.
+            # 매 픽셀마다 설정 파일을 쓰면 디스크를 쉴 새 없이 두드린다.
+            self._set_opacity(percent / 100, remember=False)
+            readout.config(text=f"{percent}%" + ("  (원래대로)" if percent == 100 else ""))
+
+        slider.config(command=slide)
+        slide(slider.get())
+        slider.bind("<ButtonRelease-1>",
+                    lambda e: self._set_opacity(slider.get() / 100))
+        slider.bind("<KeyRelease>",
+                    lambda e: self._set_opacity(slider.get() / 100))
+
+        ends = tk.Frame(frame, bg=PAPER)
+        ends.pack(fill="x")
+        tk.Label(ends, text="흐리게", font=self.f_small, bg=PAPER, fg=SOFT).pack(side="left")
+        tk.Label(ends, text="진하게", font=self.f_small, bg=PAPER, fg=SOFT).pack(side="right")
+
+        def finish():
+            self._set_opacity(slider.get() / 100)
+            window.destroy()
+
+        buttons = tk.Frame(frame, bg=PAPER)
+        buttons.pack(fill="x", pady=(14, 0))
+        self._foot_button(buttons, "확인", lambda e=None: finish()).pack(side="right")
+        self._foot_button(
+            buttons, "원래대로",
+            lambda e=None: (slider.set(100), self._set_opacity(1.0))).pack(side="left")
+
+        window.protocol("WM_DELETE_WINDOW", finish)
+        window.update_idletasks()
+        window.geometry(f"+{self.root.winfo_x() - 40}+{self.root.winfo_y() + 60}")
+        window.grab_set()
 
     def check_update(self, quiet: bool = True) -> None:
         """새 버전이 있는지 알아본다. quiet면 없을 때 아무 말도 하지 않는다."""
@@ -581,6 +648,19 @@ class Widget:
 
     def run(self):
         self.root.mainloop()
+
+
+def clamp_opacity(value) -> float:
+    """투명도를 쓸 수 있는 범위로 가둔다.
+
+    OPACITY_MIN 아래로 내려가면 위젯이 어디 있는지 보이지 않아 오른쪽
+    버튼도 누르지 못하고, 되돌릴 방법이 없어진다.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(OPACITY_MIN, min(1.0, number))
 
 
 def _widget_sort(doc: dict):
