@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -148,6 +150,81 @@ def open_in_os(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
+def _allow_foreground_steal() -> None:
+    """다른 프로세스가 창을 앞으로 세워도 된다고 윈도우에 알린다.
+
+    윈도우는 포그라운드가 아닌 프로세스가 남의 창을 앞으로 끌어올리는 것을
+    막는다. 우리가 탐색기를 열 때 화면 앞에 있는 것은 브라우저이므로,
+    탐색기 창이 다른 창 뒤에서 열려 "아무 일도 안 일어났다" 처럼 보인다.
+    우리가 포그라운드가 아니면 이 호출은 그냥 실패하며, 실패해도 해가 없다.
+    """
+    try:
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)   # ASFW_ANY
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _raise_explorer_window(folder_name: str) -> None:
+    """방금 연 탐색기 창을 찾아 앞으로 끌어올린다.
+
+    창이 뜨는 데 시간이 걸리므로 잠깐 지켜본다. HTTP 응답을 붙잡아 두지
+    않도록 딴 스레드에서 돈다. 실패해도 조용히 넘어간다 — 창은 어차피
+    열려 있고, 앞으로 못 세운 것뿐이다.
+    """
+    if not folder_name:
+        return
+
+    def work() -> None:
+        try:
+            from ctypes import wintypes
+            user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+            found: list[int] = []
+
+            @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            def visit(hwnd, _param):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                name = ctypes.create_unicode_buffer(128)
+                user32.GetClassNameW(hwnd, name, 128)
+                if name.value not in ("CabinetWClass", "ExploreWClass"):
+                    return True
+                title = ctypes.create_unicode_buffer(320)
+                user32.GetWindowTextW(hwnd, title, 320)
+                # 제목은 대개 폴더 이름이다. 엉뚱한 창을 끌어올리지 않도록
+                # 이름이 맞는 것만 고른다.
+                if title.value.startswith(folder_name):
+                    found.append(hwnd)
+                    return False
+                return True
+
+            for _ in range(15):                 # 3초까지 기다린다
+                found.clear()
+                user32.EnumWindows(visit, 0)
+                if found:
+                    break
+                time.sleep(0.2)
+            if not found:
+                return
+
+            hwnd = found[0]
+            user32.ShowWindow(hwnd, 9)          # SW_RESTORE — 최소화돼 있으면 편다
+            # 앞에 있는 창의 입력 큐에 잠시 붙어야 포그라운드를 넘겨받을 수 있다
+            ahead = user32.GetForegroundWindow()
+            ours = kernel32.GetCurrentThreadId()
+            theirs = user32.GetWindowThreadProcessId(ahead, None)
+            attached = user32.AttachThreadInput(ours, theirs, True) if theirs else False
+            try:
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+            finally:
+                if attached:
+                    user32.AttachThreadInput(ours, theirs, False)
+        except Exception:  # noqa: BLE001
+            pass                                # 창은 열렸다. 그걸로 충분하다
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 def reveal_in_os(path: Path) -> None:
     """파일이 든 폴더를 열되, 그 파일을 골라 놓은 채로 연다.
 
@@ -163,7 +240,10 @@ def reveal_in_os(path: Path) -> None:
         #   틀림  : explorer "/select,C:\업무 폴더\공문\문서.hwp"
         # 윈도우 파일명에는 큰따옴표를 쓸 수 없으므로 이 조립은 안전하다.
         # explorer 는 성공해도 종료 코드 1 을 내므로 결과는 보지 않는다.
+        _allow_foreground_steal()
         subprocess.Popen(f'explorer /select,"{path}"')
+        # 창이 다른 창 뒤에서 열리면 아무 일도 안 일어난 것처럼 보인다.
+        _raise_explorer_window(path.parent.name)
     elif sys.platform == "darwin":
         subprocess.Popen(["open", "-R", str(path)])
     else:

@@ -64,6 +64,24 @@ class RevealCommand(unittest.TestCase):
         simple = Path(r"C:\gongmun\a.txt")
         self.assertEqual(self._sent(simple), f'explorer /select,"{simple}"')
 
+    def test_reveal_does_not_block_the_request(self):
+        """창을 앞으로 끌어올리는 일은 딴 스레드에서 해야 한다.
+
+        여기서 기다리면 브라우저의 요청이 몇 초씩 붙잡힌다.
+        """
+        import time as _time
+        start = _time.monotonic()
+        app._raise_explorer_window("이런이름의폴더는없다ZZZ")
+        self.assertLess(_time.monotonic() - start, 0.5,
+                        "요청 스레드에서 창을 기다리고 있습니다")
+
+    def test_foreground_helpers_never_raise(self):
+        """창을 못 세워도 파일 열기 자체는 성공해야 한다."""
+        app._allow_foreground_steal()
+        for junk in ("", "없는폴더ZZZ"):
+            with self.subTest(name=junk):
+                app._raise_explorer_window(junk)
+
     def test_macos_reveals_rather_than_opens(self):
         sent = self._sent(self.SPACED, platform="darwin")
         self.assertEqual(sent[:2], ["open", "-R"])
