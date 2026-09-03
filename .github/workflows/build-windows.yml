@@ -51,7 +51,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          # 버전을 못 박는다. 예전에 그냥 pyinstaller 라고만 적어 두었다가
+          # 6.22.0 이 나오면서 새로 생긴 검사에 걸려, 갱신하고 다시 뜰 때
+          # "Security validation failure" 창이 뜨는 일이 있었다.
+          # 올릴 때는 올린 뒤 실제로 갱신-재시작까지 해 보고 올린다.
+          pip install pyinstaller==6.22.2
 
       - name: 올라온 파일 확인
         run: Get-ChildItem -Force | Select-Object Name, Length

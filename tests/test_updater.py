@@ -32,6 +32,65 @@ class VersionCompare(unittest.TestCase):
         self.assertTrue(updater.ASSET_NAME.isascii())
 
 
+class RestartEnvironment(unittest.TestCase):
+    """재시작할 때 PyInstaller 의 실행 환경 표시를 물려주면 안 된다.
+
+    물려주면 새 exe 가 "나는 onefile 부모가 띄운 자식이다" 라고 착각하고
+    부모가 같은 파일인지 검사하는데, 그때 부모(죽어가는 옛 프로세스)의
+    파일은 이미 .old 로 이름이 바뀐 뒤라 이런 창이 뜬다.
+
+        Security validation failure: parent process has different executable!
+
+    PyInstaller 6.22.2 로 실제 onefile exe 를 만들어 재현하고 고친 자리다.
+    """
+
+    def setUp(self):
+        self._saved = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    def test_strips_pyinstaller_markers(self):
+        os.environ["_PYI_ARCHIVE_FILE"] = r"C:\Programs\gongmun\gongmun.exe"
+        os.environ["_PYI_PARENT_PROCESS_LEVEL"] = "1"
+        os.environ["_PYI_APPLICATION_HOME_DIR"] = r"C:\Temp\_MEI123"
+        os.environ["_MEIPASS2"] = r"C:\Temp\_MEI123"
+        fresh = updater._fresh_env()
+        left = sorted(k for k in fresh if k.startswith("_PYI_") or k == "_MEIPASS2")
+        self.assertEqual(left, [], f"물려주면 안 되는 것이 남았습니다: {left}")
+
+    def test_keeps_everything_else(self):
+        os.environ["_PYI_ARCHIVE_FILE"] = "x"
+        os.environ["GONGMUN_TEST_KEEP"] = "지켜야 함"
+        fresh = updater._fresh_env()
+        self.assertEqual(fresh.get("GONGMUN_TEST_KEEP"), "지켜야 함")
+        self.assertIn("PATH", fresh, "PATH 까지 지우면 새 프로그램이 못 뜬다")
+
+    def test_restart_passes_the_cleaned_environment(self):
+        """restart() 가 정말 그 환경으로 띄우는지."""
+        os.environ["_PYI_ARCHIVE_FILE"] = "x"
+        captured = {}
+
+        def fake_popen(args, **kwargs):
+            captured.update(kwargs)
+            return None
+
+        def stop(code):
+            raise SystemExit(code)
+
+        original = (updater.subprocess.Popen, updater.os._exit)
+        updater.subprocess.Popen, updater.os._exit = fake_popen, stop
+        try:
+            with self.assertRaises(SystemExit):
+                updater.restart()
+        finally:
+            updater.subprocess.Popen, updater.os._exit = original
+
+        self.assertIn("env", captured, "환경을 지정하지 않고 띄우고 있습니다")
+        self.assertNotIn("_PYI_ARCHIVE_FILE", captured["env"])
+
+
 class ReleaseParsing(unittest.TestCase):
 
     def test_picks_smaller_exe_as_app(self):

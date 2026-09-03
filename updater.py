@@ -195,11 +195,34 @@ def apply(url: str) -> Path:
     return current
 
 
+def _fresh_env() -> dict:
+    """PyInstaller 가 심어 둔 실행 환경 표시를 걷어낸 환경 변수.
+
+    onefile exe 는 자기 자신을 한 번 더 띄워 그 안에서 파이썬을 돌린다.
+    그 자식에게 넘기려고 `_PYI_*` 변수를 심어 두는데, 우리가 그걸 그대로
+    물려준 채 새 exe 를 띄우면 새 exe 가 "나는 onefile 부모가 띄운
+    자식이다" 라고 착각한다. 그러면 부모가 같은 파일에서 왔는지 확인하는데,
+    그 시점 부모(지금 이 프로세스)의 파일은 이미 `.old` 로 이름이 바뀐
+    뒤라 다른 파일로 보인다. 그래서 이런 창이 뜬다.
+
+        Security validation failure: parent process has different executable!
+
+    PyInstaller 6.22.0 에서 이 검사가 생겼다. 표시를 지우면 새 exe 가
+    남과 무관한 새 프로그램으로 떠서 검사 자체를 하지 않는다.
+    """
+    env = dict(os.environ)
+    for name in [n for n in env if n.startswith("_PYI_")]:
+        del env[name]
+    env.pop("_MEIPASS2", None)          # 예전 PyInstaller 가 쓰던 이름
+    return env
+
+
 def restart() -> None:
     """새 파일로 다시 띄우고 지금 것은 끝낸다."""
     exe = Path(sys.executable)
     try:
-        subprocess.Popen([str(exe)], cwd=str(exe.parent), close_fds=True)
+        subprocess.Popen([str(exe)], cwd=str(exe.parent), close_fds=True,
+                         env=_fresh_env())
     except OSError:
         pass
     os._exit(0)
