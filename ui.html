@@ -638,6 +638,7 @@ async function openPanel(id, fileId){
     ${_preview(shown, members.length > 1 ? shown.filename : "")}
     <div class="actions">
       <button class="primary" id="openfile">${members.length > 1 ? "보고 있는 파일 열기" : "원본 파일 열기"}</button>
+      <button class="ghost" id="openfolder">파일 위치 열기</button>
       <button class="ghost" id="toggledone">${group.done ? "처리 취소" : "처리 완료"}</button>
     </div>`;
 
@@ -672,6 +673,12 @@ async function openPanel(id, fileId){
   if (switcher) switcher.onclick = () => { plainView = !plainView; openPanel(id); };
   $("openfile").onclick = async () => {
     const res = await call("/api/open?id=" + encodeURIComponent(viewingFile || id));
+    if (res.error) toast(res.error);
+  };
+  // 그 파일이 든 폴더를 파일을 고른 채로 연다. 첨부가 여럿일 때
+  // "이게 어디 있더라" 를 바로 알 수 있다.
+  $("openfolder").onclick = async () => {
+    const res = await call("/api/reveal?id=" + encodeURIComponent(viewingFile || id));
     if (res.error) toast(res.error);
   };
   $("toggledone").onclick = async () => {

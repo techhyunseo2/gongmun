@@ -138,6 +138,22 @@ def open_in_os(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
+def reveal_in_os(path: Path) -> None:
+    """파일이 든 폴더를 열되, 그 파일을 골라 놓은 채로 연다.
+
+    첨부가 여럿인 공문에서 "이 파일이 어디 있지" 를 바로 알 수 있게 한다.
+    파일을 고르는 기능이 없는 환경에서는 폴더만 연다.
+    """
+    if sys.platform.startswith("win"):
+        # explorer 는 성공해도 종료 코드 1 을 내므로 결과를 보지 않는다.
+        # "/select," 와 경로는 반드시 한 덩어리로 넘겨야 한다.
+        subprocess.Popen(["explorer", f"/select,{path}"])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)])
+    else:
+        open_in_os(path.parent)
+
+
 # ------------------------------------------------------------------ ICS
 
 def _ics_escape(text: str) -> str:
@@ -275,6 +291,20 @@ class Handler(BaseHTTPRequestHandler):
             preview = query.get("preview", ["0"])[0] == "1"
             state = self._archive(preview)
             return self._json(state)
+
+        if route == "/api/reveal":
+            doc = self.store.get(query.get("id", [""])[0])
+            if not doc:
+                return self._json({"error": "찾을 수 없습니다."}, 404)
+            target = Path(doc["path"])
+            if target.exists():
+                reveal_in_os(target)
+            elif target.parent.is_dir():
+                # 파일은 없어졌어도 있던 자리를 열어 주는 편이 낫다
+                open_in_os(target.parent)
+            else:
+                return self._json({"error": "폴더를 찾지 못했습니다."}, 404)
+            return self._json({"ok": True})
 
         if route == "/api/open-folder":
             open_in_os(self.folder)
