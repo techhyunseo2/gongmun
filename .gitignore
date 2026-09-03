@@ -10,3 +10,7 @@ dist/
 # 편집기 설정
 .vscode/
 .idea/
+
+# 실제 공문 — 개인정보가 들어 있다. 절대 커밋하지 않는다
+# (tests/test_licensing.py 의 NoRealDocuments 가 지킨다)
+공문/

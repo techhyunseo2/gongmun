@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -101,6 +102,53 @@ class NoOutboundRequests(unittest.TestCase):
         for route in app.ASSETS:
             with self.subTest(route=route):
                 self.assertNotIn("..", route)
+
+
+class NoRealDocuments(unittest.TestCase):
+    """실제 공문이 저장소에 딸려 들어가면 안 된다.
+
+    저장소는 공개이고, 공모 요강은 "지정 서식을 제외한 제출자료에
+    개인정보가 포함된 경우 실격" 이라고 못박는다. 필수 제출자료에
+    '전체 소스' 가 들어 있으므로 여기 섞인 문서는 그대로 따라간다.
+
+    실제로 `공문/` 아래에 남의 학교 선생님 실명·연락처와 외부 강사
+    명단이 든 공문 2건이 커밋돼 있었다. 손으로 시험하다 남긴 것이라
+    프로그램은 멀쩡히 돌아서 아무도 못 알아챘다. 이 파일의 다른
+    검사들과 같은 종류다 — 빠져도 티가 안 난다.
+
+    테스트용 문서는 코드가 그때그때 임시 폴더에 만들어 쓴다
+    (`tests/test_organize.py` 등). 저장소에 둘 이유가 없다.
+    """
+
+    DOCUMENTS = {
+        ".hwp", ".hwpx", ".pdf", ".doc", ".docx",
+        ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx",
+    }
+
+    def _tracked_files(self):
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(ROOT), "ls-files", "-z"],
+                capture_output=True, check=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:  # git 이 없는 환경
+            self.skipTest(f"git 을 쓸 수 없어 건너뜁니다: {exc}")
+        return [n for n in done.stdout.decode("utf-8").split("\0") if n]
+
+    def test_no_documents_are_tracked(self):
+        found = sorted(
+            name for name in self._tracked_files()
+            if Path(name).suffix.lower() in self.DOCUMENTS
+        )
+        self.assertEqual(found, [], (
+            "실제 문서가 저장소에 들어 있습니다. 개인정보가 섞여 있을 수 "
+            "있으니 지우고 `.gitignore` 로 막으세요: " + ", ".join(found)
+        ))
+
+    def test_inbox_folder_is_ignored(self):
+        """`공문/` 을 만들어 놓고 시험하다 다시 커밋하는 일을 막는다."""
+        text = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("공문/", text, ".gitignore 에 `공문/` 이 없습니다.")
 
 
 if __name__ == "__main__":
