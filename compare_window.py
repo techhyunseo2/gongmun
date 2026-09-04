@@ -54,8 +54,8 @@ class _Picker:
     def __init__(self, root: tk.Misc, message: str):
         left, top, width, height = _virtual_screen()
         self.root = root
-        self.origin = (left, top)
-        self.start = None
+        self.start = None            # 막 위에 사각형을 그리는 자리 (tkinter)
+        self.from_screen = None      # 실제로 찍을 자리 (윈도우 좌표)
         self.picked = None
 
         self.window = tk.Toplevel(root)
@@ -80,7 +80,11 @@ class _Picker:
         self.canvas.focus_set()
 
     def _down(self, event):
+        # 그리는 자리는 tkinter 좌표, 찍을 자리는 윈도우 좌표. 둘을 따로
+        # 둔다 — 화면 배율이 걸린 컴퓨터에서는 두 좌표계가 어긋나서, 섞어
+        # 쓰면 끌어낸 데가 아니라 엉뚱한 곳이 찍힌다.
         self.start = (event.x, event.y)
+        self.from_screen = screen_compare.cursor_at()
         self.canvas.delete("box")
 
     def _move(self, event):
@@ -90,12 +94,12 @@ class _Picker:
         self.canvas.create_rectangle(*self.start, event.x, event.y,
                                      outline="white", width=2, tags="box")
 
-    def _up(self, event):
+    def _up(self, _event):
         if not self.start:
             return
-        x0, y0 = self.start
-        self.picked = (min(x0, event.x), min(y0, event.y),
-                       abs(event.x - x0), abs(event.y - y0))
+        x0, y0 = self.from_screen
+        x1, y1 = screen_compare.cursor_at()
+        self.picked = (min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
         self._finish()
 
     def _finish(self):
@@ -115,9 +119,8 @@ class _Picker:
         time.sleep(SETTLE)
         self.root.update()
 
-        left, top, width, height = self.picked
-        return screen_compare.capture(self.origin[0] + left,
-                                      self.origin[1] + top, width, height)
+        # 이미 윈도우 좌표다. 여기에 무엇을 더하면 안 된다.
+        return screen_compare.capture(*self.picked)
 
 
 def _as_png(shot: screen_compare.Shot) -> str:

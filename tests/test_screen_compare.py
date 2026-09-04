@@ -44,7 +44,7 @@ class _Rect(ctypes.Structure):
                 ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
 
 
-def render(lines, width=900, height=380, left=12, step=30):
+def render(lines, width=900, height=380, left=12, step=30, size=-15):
     """메모리에 글자를 그려 Shot 을 만든다. 창을 띄우지 않는다."""
     gdi32, user32 = ctypes.windll.gdi32, ctypes.windll.user32
     dc = gdi32.CreateCompatibleDC(0)
@@ -56,7 +56,7 @@ def render(lines, width=900, height=380, left=12, step=30):
     bitmap = gdi32.CreateDIBSection(dc, ctypes.byref(head), 0,
                                     ctypes.byref(bits), None, 0)
     white = gdi32.CreateSolidBrush(0x00FFFFFF)
-    font = gdi32.CreateFontW(-15, 0, 0, 0, 400, 0, 0, 0, 129, 0, 0, 4, 0,
+    font = gdi32.CreateFontW(size, 0, 0, 0, 400, 0, 0, 0, 129, 0, 0, 4, 0,
                              "맑은 고딕")
     try:
         gdi32.SelectObject(dc, bitmap)
@@ -301,13 +301,16 @@ class VerticalRules(unittest.TestCase):
 
 
 def pane(lines, pad_left=40, pad_top=30, extra_right=0, extra_bottom=0,
-         paper_width=760, paper_height=360):
+         paper_width=760, paper_height=360, zoom=1.0):
     """한글 문서비교 창 한 쪽 흉내.
 
     회색 바탕 위에 흰 종이가 있고, 아래에 상태표시줄, 옆에 스크롤바가
     붙는다. 창은 늘 이 모양이라 종이를 찾아낼 수 있다.
     """
-    doc = render(lines, width=paper_width, height=paper_height)
+    paper_width = int(paper_width * zoom)
+    paper_height = int(paper_height * zoom)
+    doc = render(lines, width=paper_width, height=paper_height,
+                 size=int(-15 * zoom), step=int(30 * zoom))
     width = pad_left + paper_width + 20 + extra_right
     height = pad_top + paper_height + 26 + extra_bottom
     grey = bytearray([128] * (width * height))          # 종이 바깥 회색 바탕
@@ -378,11 +381,30 @@ class Paper(unittest.TestCase):
 
     def test_a_different_zoom_is_refused(self):
         """배율이 다르면 글자가 다르게 그려져 온 문서가 바뀐 것처럼 나온다."""
-        small = pane(BEFORE, paper_width=760)
-        large = pane(BEFORE, paper_width=900)
         with self.assertRaises(sc.ScreenError) as caught:
-            sc.prepare(small, large)
+            sc.prepare(pane(BEFORE), pane(BEFORE, zoom=1.25))
         self.assertIn("배율", str(caught.exception))
+
+    def test_a_wider_paper_at_the_same_zoom_is_fine(self):
+        """종이가 넓은 것과 배율이 다른 것은 다르다. 글자 크기가 같으면 통과."""
+        sc.prepare(pane(BEFORE, paper_width=760), pane(BEFORE, paper_width=900))
+
+    def test_a_narrow_drag_does_not_look_like_a_different_zoom(self):
+        """끌어낸 자리가 종이보다 좁으면 종이가 잘린다.
+
+        예전에는 그 잘린 폭을 종이 너비로 알고 배율이 다르다고 했다.
+        다른 컴퓨터에서 실제로 난 오류다. 글줄 높이로 재면 흔들리지 않는다.
+        """
+        full = pane(BEFORE)
+        def clip(shot, left, right):
+            width = shot.width - left - right
+            rows = [shot.grey[y * shot.width + left:
+                              (y + 1) * shot.width - right]
+                    for y in range(shot.height)]
+            return sc.Shot(width, shot.height, b"".join(rows))
+        for one, two in ((60, 0), (0, 60), (60, 120), (100, 40)):
+            with self.subTest(one=one, two=two):
+                sc.prepare(clip(full, one, 0), clip(full, 0, two))
 
     def test_a_plain_white_shot_loses_nothing(self):
         """문서비교 창이 아니라 흰 바탕만 찍었을 때.

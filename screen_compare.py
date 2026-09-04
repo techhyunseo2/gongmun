@@ -58,8 +58,9 @@ PAPER_MIN = 80
 # 비어 있는 것과 가른다.
 PAPER_ROWS = 12
 
-# 두 종이의 너비가 이 비율 넘게 다르면 확대 배율이 어긋난 것으로 본다.
-ZOOM_SLACK = 0.02
+# 글줄 높이가 이 비율 넘게 다르면 확대 배율이 어긋난 것으로 본다. 배율을
+# 10% 만 올려도 높이가 15% 늘어나므로 이 정도면 충분히 가른다.
+ZOOM_SLACK = 0.12
 
 # 끊기지 않고 이 길이(픽셀) 넘게 이어지는 칸은 글자가 아니라 선으로 본다.
 # 그림이 크면 글자도 크므로 높이에 따라 함께 키운다.
@@ -149,6 +150,25 @@ def to_grey(raw: bytes) -> bytes:
     return bytes(raw[i + 1] for i in range(0, len(raw), 4))
 
 
+class _Point(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+def cursor_at() -> tuple[int, int]:
+    """마우스가 지금 있는 자리. 화면을 찍을 때와 **같은 좌표계** 로 돌려준다.
+
+    tkinter 가 알려 주는 자리를 쓰면 안 된다. 화면 배율이 걸린 컴퓨터에서는
+    tkinter 가 보는 좌표와 윈도우가 보는 좌표가 어긋나서, 끌어낸 자리가
+    아니라 엉뚱한 데가 찍힌다. 실제로 그런 컴퓨터가 있었다.
+
+    여기서 물어본 자리는 `capture()` 가 쓰는 좌표계와 같으므로, 배율이
+    어떻든 끌어낸 그 자리가 찍힌다.
+    """
+    point = _Point()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+    return point.x, point.y
+
+
 def capture(left: int, top: int, width: int, height: int) -> Shot:
     """화면의 그 사각형만 찍는다. 바깥은 애초에 복사되지 않는다."""
     if sys.platform != "win32":
@@ -194,14 +214,38 @@ def prepare(before: Shot, after: Shot) -> tuple[Shot, Shot]:
         return before, after
 
     cut_before, cut_after = _crop(before, one), _crop(after, two)
-    wide = max(cut_before.width, cut_after.width)
-    narrow = min(cut_before.width, cut_after.width)
-    if wide - narrow > max(4, wide * ZOOM_SLACK):
-        # 배율이 다르면 글자가 다르게 그려져 온 문서가 바뀐 것처럼 나온다.
-        # 조용히 틀린 답을 주느니 못 하겠다고 말한다.
+    _check_zoom(cut_before, cut_after)
+    return cut_before, cut_after
+
+
+def _check_zoom(before: Shot, after: Shot) -> None:
+    """배율이 어긋났으면 못 하겠다고 말한다. **글줄 높이** 로 잰다.
+
+    처음에는 종이 너비로 쟀는데 틀렸다. 끌어낸 자리가 종이보다 좁으면
+    종이가 잘려서, 보이는 너비가 종이 너비가 아니라 **끌어낸 폭** 이 된다.
+    두 번 끄는 폭이 조금만 달라도 배율이 같은데 다르다고 나왔다 — 다른
+    컴퓨터에서 실제로 그 오류가 났다.
+
+    글줄 높이는 잘려도 그대로다. 실측으로 배율을 그대로 따라간다:
+    100% 13px, 110% 15px, 125% 17px, 150% 22px, 200% 29px.
+    """
+    one, two = _line_height(before), _line_height(after)
+    if not one or not two:
+        return
+    if abs(one - two) > max(1, max(one, two) * ZOOM_SLACK):
         raise ScreenError("두 문서의 확대 배율이 서로 다른 것 같습니다.\n\n"
                           "같은 배율(예: 둘 다 100%)로 맞춘 뒤 다시 해 주세요.")
-    return cut_before, cut_after
+
+
+def _line_height(shot: Shot) -> float:
+    """글줄 높이의 가운데 값. 제목처럼 유난히 큰 줄에 휘둘리지 않는다."""
+    found = sorted(bottom - top for top, bottom in bands(shot))
+    if not found:
+        return 0.0
+    middle = len(found) // 2
+    if len(found) % 2:
+        return float(found[middle])
+    return (found[middle - 1] + found[middle]) / 2
 
 
 def crop_to_paper(shot: Shot) -> Shot:

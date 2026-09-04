@@ -78,6 +78,72 @@ class Headline(unittest.TestCase):
         self.assertNotIn("새로 들어온 줄", said)
 
 
+class _Nothing:
+    """창 없이 고르기 로직만 돌리기 위한 허수아비.
+
+    무엇을 물어도 또 다른 허수아비를 내놓고, 불러도 아무 일도 안 한다.
+    그래서 캔버스·창·타이머를 흉내 내지 않아도 된다.
+    """
+
+    def __getattr__(self, name):
+        child = _Nothing()
+        setattr(self, name, child)
+        return child
+
+    def __call__(self, *args, **kwargs):
+        return None
+
+
+@unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
+class PickedRegion(unittest.TestCase):
+    """끌어낸 그 자리가 찍혀야 한다.
+
+    화면 배율이 걸린 컴퓨터에서는 tkinter 가 보는 좌표와 윈도우가 보는
+    좌표가 어긋난다. 섞어 쓰면 끌어낸 데가 아니라 엉뚱한 곳이 찍힌다 —
+    다른 컴퓨터에서 실제로 그렇게 나왔다.
+    """
+
+    def drag(self, corners, tk_start=(10, 10)):
+        """마우스를 그 자리에서 끌었다고 하고, 무엇을 찍으려 했는지 본다."""
+        moves = list(corners)
+        asked = []
+        real = (cw.screen_compare.cursor_at, cw.screen_compare.capture)
+        cw.screen_compare.cursor_at = lambda: moves.pop(0)
+        cw.screen_compare.capture = lambda *box: asked.append(box)
+        try:
+            stand = _Nothing()
+            stand.start = None
+            stand.from_screen = None
+            stand.picked = None
+            press = _Nothing()
+            press.x, press.y = tk_start
+            cw._Picker._down(stand, press)
+            cw._Picker._up(stand, None)
+            cw._Picker.run(stand)
+        finally:
+            cw.screen_compare.cursor_at, cw.screen_compare.capture = real
+        return asked
+
+    def test_the_rectangle_is_the_one_the_mouse_drew(self):
+        asked = self.drag([(300, 200), (900, 640)])
+        self.assertEqual(asked, [(300, 200, 600, 440)])
+
+    def test_dragging_up_and_left_works_too(self):
+        asked = self.drag([(900, 640), (300, 200)])
+        self.assertEqual(asked, [(300, 200, 600, 440)])
+
+    def test_a_second_monitor_on_the_left_is_fine(self):
+        """왼쪽에 붙인 모니터는 좌표가 음수다. 그대로 찍어야 한다."""
+        asked = self.drag([(-1500, 100), (-900, 500)])
+        self.assertEqual(asked, [(-1500, 100, 600, 400)])
+
+    def test_the_tkinter_place_never_leaks_into_the_shot(self):
+        """막 위에 사각형을 그리는 자리와 찍을 자리는 따로다."""
+        one = self.drag([(300, 200), (900, 640)], tk_start=(10, 10))
+        two = self.drag([(300, 200), (900, 640)], tk_start=(777, 555))
+        self.assertEqual(one, two, "tkinter 좌표가 찍는 자리에 섞였습니다")
+
+
 @unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
 class HidingTheWidget(unittest.TestCase):
     """고르는 동안 위젯이 감춰져야 한다.
