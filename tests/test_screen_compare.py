@@ -300,6 +300,109 @@ class VerticalRules(unittest.TestCase):
                          "다 지워 놓고 글줄이 없다고 하면 안 됩니다")
 
 
+def pane(lines, pad_left=40, pad_top=30, extra_right=0, extra_bottom=0,
+         paper_width=760, paper_height=360):
+    """한글 문서비교 창 한 쪽 흉내.
+
+    회색 바탕 위에 흰 종이가 있고, 아래에 상태표시줄, 옆에 스크롤바가
+    붙는다. 창은 늘 이 모양이라 종이를 찾아낼 수 있다.
+    """
+    doc = render(lines, width=paper_width, height=paper_height)
+    width = pad_left + paper_width + 20 + extra_right
+    height = pad_top + paper_height + 26 + extra_bottom
+    grey = bytearray([128] * (width * height))          # 종이 바깥 회색 바탕
+    for y in range(paper_height):
+        start = (pad_top + y) * width + pad_left
+        grey[start:start + paper_width] = doc.grey[y * paper_width:
+                                                   (y + 1) * paper_width]
+    for y in range(pad_top, pad_top + paper_height):    # 종이 테두리 선
+        grey[y * width + pad_left - 1] = 60
+        grey[y * width + pad_left + paper_width] = 60
+    for y in range(height - 24, height - 20):           # 상태표시줄 글자
+        for x in range(10, width - 10, 3):
+            grey[y * width + x] = 40
+    for y in range(pad_top, pad_top + 120):             # 스크롤바 손잡이
+        for x in range(width - 14, width - 4):
+            grey[y * width + x] = 90
+    return sc.Shot(width, height, bytes(grey))
+
+
+@unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
+class Paper(unittest.TestCase):
+    """문서비교 창에서 흰 종이만 잘라낸다.
+
+    창은 늘 같은 모양이다 — 종이 바깥은 회색이고, 아래에 상태표시줄,
+    옆에 스크롤바가 붙는다. 그 부속들이 견주는 대상에 들어가면 공문
+    내용이 아닌데도 표시가 뜬다. 실제로 상태표시줄에 상자가 쳐졌다.
+    """
+
+    def test_the_paper_is_found(self):
+        cut = sc.crop_to_paper(pane(BEFORE))
+        self.assertEqual((cut.width, cut.height), (760, 360))
+        self.assertEqual(len(sc.bands(cut)), len(BEFORE))
+
+    def test_the_same_paper_comes_out_however_you_drag(self):
+        """대충 끌어도 같은 자리가 잘려야 한다. 손으로 끄는 범위는 매번 다르다."""
+        sizes = set()
+        for args in ({}, {"pad_left": 110, "pad_top": 70,
+                          "extra_right": 60, "extra_bottom": 90},
+                     {"extra_right": 120}, {"pad_top": 200, "extra_bottom": 260}):
+            cut = sc.crop_to_paper(pane(BEFORE, **args))
+            sizes.add((cut.width, cut.height))
+        self.assertEqual(len(sizes), 1, f"자른 크기가 제각각입니다: {sizes}")
+
+    def test_window_furniture_never_reaches_the_comparison(self):
+        """상태표시줄과 스크롤바는 공문이 아니다."""
+        after = list(BEFORE)
+        after[4] = ("1. 관련: 예시중학교-2949(2026. 5. 14., "
+                    "“2026 학교교육계획”)호")
+        one, two = sc.prepare(pane(BEFORE), pane(after, pad_left=130,
+                                                 pad_top=90, extra_right=80))
+        marks = changed(sc.compare(one, two))
+        self.assertEqual(len(marks), 1, f"창 부속까지 잡혔습니다: {marks}")
+        # 스크롤바가 있던 자리는 잘려 나가 아예 없다
+        self.assertLess(marks[0].bottom, two.height)
+
+    def test_dragging_differently_gives_the_same_answer(self):
+        after = list(BEFORE)
+        after[4] = ("1. 관련: 예시중학교-2949(2026. 5. 14., "
+                    "“2026 학교교육계획”)호")
+        answers = set()
+        for one, two in (({}, {}),
+                         ({}, {"pad_left": 130, "pad_top": 90, "extra_right": 80}),
+                         ({"pad_left": 150, "extra_bottom": 80}, {})):
+            a, b = sc.prepare(pane(BEFORE, **one), pane(after, **two))
+            marks = changed(sc.compare(a, b))
+            answers.add(tuple((m.state, tuple(m.spans)) for m in marks))
+        self.assertEqual(len(answers), 1, f"끄는 범위마다 답이 다릅니다: {answers}")
+
+    def test_a_different_zoom_is_refused(self):
+        """배율이 다르면 글자가 다르게 그려져 온 문서가 바뀐 것처럼 나온다."""
+        small = pane(BEFORE, paper_width=760)
+        large = pane(BEFORE, paper_width=900)
+        with self.assertRaises(sc.ScreenError) as caught:
+            sc.prepare(small, large)
+        self.assertIn("배율", str(caught.exception))
+
+    def test_a_plain_white_shot_loses_nothing(self):
+        """문서비교 창이 아니라 흰 바탕만 찍었을 때.
+
+        온통 흰색이면 그림 전체가 종이로 잡힌다. 바깥 여백만 깎일 뿐
+        글은 하나도 잃지 않아야 한다.
+        """
+        plain = render(BEFORE)
+        cut = sc.crop_to_paper(plain)
+        self.assertEqual(len(sc.bands(cut)), len(BEFORE), "글줄을 잃었습니다")
+        self.assertEqual(cut.width, plain.width)
+
+    def test_nothing_bright_enough_is_left_alone(self):
+        """밝은 데가 없으면 종이를 찾은 것이 아니다. 그대로 둔다."""
+        dark = sc.Shot(200, 200, bytes([90] * (200 * 200)))
+        self.assertIs(sc.crop_to_paper(dark), dark)
+        one, two = sc.prepare(dark, dark)
+        self.assertIs(one, dark)
+
+
 class Privacy(unittest.TestCase):
     """찍은 화면이 어디에도 남지 않아야 한다.
 

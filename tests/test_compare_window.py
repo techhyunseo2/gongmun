@@ -97,14 +97,17 @@ class HidingTheWidget(unittest.TestCase):
             def run(inner):
                 return self.picks.pop(0) if self.picks else None
 
-        self.real = (cw._Picker, cw._Result, cw.screen_compare.compare)
+        self.real = (cw._Picker, cw._Result, cw.screen_compare.compare,
+                     cw.screen_compare.prepare)
         cw._Picker = FakePicker
         cw._Result = lambda root, shot, changes: self.log.append("결과")
         cw.screen_compare.compare = lambda before, after: []
+        cw.screen_compare.prepare = lambda before, after: (before, after)
         self.addCleanup(self.restore)
 
     def restore(self):
-        cw._Picker, cw._Result, cw.screen_compare.compare = self.real
+        (cw._Picker, cw._Result, cw.screen_compare.compare,
+         cw.screen_compare.prepare) = self.real
 
     def test_hidden_before_picking_and_back_before_the_result(self):
         cw.run(None, lambda *_: None,

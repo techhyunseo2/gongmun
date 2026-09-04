@@ -240,6 +240,9 @@ def run(root: tk.Misc, warn, hide=None, show=None) -> None:
         finally:
             if show:
                 show()
+        # 종이만 남기고 견준다. 창 부속(상태표시줄·스크롤바)이 빠지고,
+        # 드래그 범위가 서로 달라도 같은 자리가 잘려 나온다.
+        before, after = screen_compare.prepare(before, after)
         changes = screen_compare.compare(before, after)
     except screen_compare.ScreenError as exc:
         warn("결재 전후 비교", str(exc))

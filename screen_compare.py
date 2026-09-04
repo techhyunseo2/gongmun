@@ -44,6 +44,23 @@ BUCKET = 3
 # 두 글줄이 이만큼도 안 닮았으면 같은 줄이 고쳐진 것으로 보지 않는다.
 PAIRABLE = 0.55
 
+# 이보다 밝으면 종이로 본다. 그 바깥의 회색 바탕과 가르는 선.
+PAPER = 225
+
+# 한 줄(칸)이 이 비율 넘게 밝아야 종이로 친다. 글자가 있는 줄도 대부분은 흰
+# 바탕이므로 넉넉히 잡아도 된다.
+PAPER_SHARE = 0.55
+
+# 이보다 작게 잡히면 종이를 찾은 것이 아니다.
+PAPER_MIN = 80
+
+# 같은 너비가 이 줄 수 넘게 나와야 종이로 인정한다. 어쩌다 한 줄 넓게
+# 비어 있는 것과 가른다.
+PAPER_ROWS = 12
+
+# 두 종이의 너비가 이 비율 넘게 다르면 확대 배율이 어긋난 것으로 본다.
+ZOOM_SLACK = 0.02
+
 # 끊기지 않고 이 길이(픽셀) 넘게 이어지는 칸은 글자가 아니라 선으로 본다.
 # 그림이 크면 글자도 크므로 높이에 따라 함께 키운다.
 RUN_MIN = 40
@@ -165,6 +182,120 @@ def capture(left: int, top: int, width: int, height: int) -> Shot:
 
 
 # ------------------------------------------------------------------ 비교
+
+def prepare(before: Shot, after: Shot) -> tuple[Shot, Shot]:
+    """견주기 전에 종이만 남기고, 배율이 어긋났는지 살핀다.
+
+    둘 다에서 종이를 찾았을 때만 자른다. 한쪽만 찾았다면 무엇을 보고
+    있는지 확신할 수 없으므로 손대지 않는다.
+    """
+    one, two = _paper_box(before), _paper_box(after)
+    if one is None or two is None:
+        return before, after
+
+    cut_before, cut_after = _crop(before, one), _crop(after, two)
+    wide = max(cut_before.width, cut_after.width)
+    narrow = min(cut_before.width, cut_after.width)
+    if wide - narrow > max(4, wide * ZOOM_SLACK):
+        # 배율이 다르면 글자가 다르게 그려져 온 문서가 바뀐 것처럼 나온다.
+        # 조용히 틀린 답을 주느니 못 하겠다고 말한다.
+        raise ScreenError("두 문서의 확대 배율이 서로 다른 것 같습니다.\n\n"
+                          "같은 배율(예: 둘 다 100%)로 맞춘 뒤 다시 해 주세요.")
+    return cut_before, cut_after
+
+
+def crop_to_paper(shot: Shot) -> Shot:
+    """찍은 그림에서 흰 종이 부분만 잘라낸다. 못 찾으면 그대로 돌려준다.
+
+    한글 문서비교 창은 늘 같은 모양이다 — 흰 종이가 있고 그 바깥은 회색
+    바탕이며, 아래에 상태표시줄, 옆에 스크롤바가 붙는다. 그 부속들은
+    공문 내용이 아닌데도 견주는 대상에 들어가 애먼 표시를 만든다. 실제로
+    상태표시줄에 빨간 상자가 쳐졌다.
+
+    종이만 잘라내면 셋이 한꺼번에 풀린다.
+
+    - 창 부속이 비교에서 빠진다
+    - 드래그를 대충 해도 같은 자리가 잘려 나와, 두 번 끄는 범위가 달라도
+      결과가 같다
+    - 두 종이의 너비를 견주면 확대 배율이 어긋난 것을 알아챌 수 있다
+    """
+    place = _paper_box(shot)
+    return shot if place is None else _crop(shot, place)
+
+
+def _crop(shot: Shot, place: tuple[int, int, int, int]) -> Shot:
+    left, top, right, bottom = place
+    rows = [shot.grey[y * shot.width + left:y * shot.width + right]
+            for y in range(top, bottom)]
+    return Shot(right - left, bottom - top, b"".join(rows))
+
+
+def _paper_box(shot: Shot) -> tuple[int, int, int, int] | None:
+    """흰 종이의 네 귀퉁이. 찾지 못하면 None.
+
+    가로는 **줄마다 가장 긴 흰 구간을 모아 가장 흔한 것** 을 고른다.
+    글줄 사이의 빈 줄들이 종이 너비를 정확히 알려 주기 때문이다. 그림
+    전체에서 밝은 칸의 비율을 재는 방법은 쓰지 않는다 — 끄는 범위에 여백을
+    얼마나 넉넉히 넣었느냐에 따라 비율이 흔들려서, 같은 종이가 번번이 다른
+    너비로 잡혔다.
+    """
+    seen: dict[tuple[int, int], int] = {}
+    for y in range(shot.height):
+        row = shot.grey[y * shot.width:(y + 1) * shot.width]
+        span = _widest_bright(row)
+        if span is not None and span[1] - span[0] >= PAPER_MIN:
+            seen[span] = seen.get(span, 0) + 1
+    if not seen:
+        return None
+    (left, right), often = max(seen.items(), key=lambda pair: pair[1])
+    if often < PAPER_ROWS:
+        return None
+
+    # 세로는 그 너비 안에서 대체로 흰 줄이 이어지는 구간. 글이 있는 줄도
+    # 대부분은 흰 바탕이므로 넉넉한 기준으로 잡힌다.
+    need = (right - left) * PAPER_SHARE
+    white = [sum(1 for value in shot.grey[y * shot.width + left:
+                                          y * shot.width + right]
+                 if value >= PAPER) >= need
+             for y in range(shot.height)]
+    span = _longest_true(white)
+    if span is None:
+        return None
+    top, bottom = span
+
+    # 테두리 선을 피해 안쪽으로 물러나는 여유를 뒀다가 뺐다. 선은 어두워서
+    # 애초에 밝은 구간에 들어오지 않고, 혹 들어와도 세로선으로 걸러진다.
+    # 막는 것이 없는 여유를 남기면 뜻이 있는 것처럼 보여 더 나쁘다.
+    if right - left < PAPER_MIN or bottom - top < PAPER_MIN:
+        return None
+    return left, top, right, bottom
+
+
+def _widest_bright(row: bytes) -> tuple[int, int] | None:
+    """그 줄에서 밝은 점이 가장 길게 이어진 구간."""
+    best = start = None
+    for x, value in enumerate(row):
+        if value >= PAPER:
+            start = x if start is None else start
+            if best is None or x + 1 - start > best[1] - best[0]:
+                best = (start, x + 1)
+        else:
+            start = None
+    return best
+
+
+def _longest_true(flags: list[bool]) -> tuple[int, int] | None:
+    """True 가 가장 길게 이어진 구간."""
+    best = run = None
+    for i, on in enumerate(flags + [False]):
+        if on:
+            run = i if run is None else run
+        elif run is not None:
+            if best is None or i - run > best[1] - best[0]:
+                best = (run, i)
+            run = None
+    return best
+
 
 def _find_rules(shot: Shot) -> frozenset[int]:
     """세로로 길게 이어지는 칸을 찾는다. `Shot.rules` 가 부른다.
