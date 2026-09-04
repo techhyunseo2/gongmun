@@ -47,6 +47,14 @@ PAIRABLE = 0.55
 # 이만큼 붙어 있는 표시 구간은 하나로 묶는다. 상자가 잘게 흩어지면 읽기 어렵다.
 JOIN = 8
 
+# 세로로 이 비율 넘게 이어지는 칸은 글자가 아니라 선으로 본다.
+#
+# 글자의 세로획이 여기 걸릴까 걱정해 "낮은 그림에서는 찾지 않는다" 는
+# 방어를 뒀다가 뺐다. 16px 까지 바짝 잘라 재 봐도 세로획은 그림 높이의
+# 80% 에 닿지 못한다 — 글자 사이에 빈 줄이 있기 때문이다. 막지 못하는
+# 방어를 남겨 두면 뜻이 있는 것처럼 보여서 더 나쁘다.
+RULE = 0.8
+
 SAME, EDITED, ADDED, REMOVED = "same", "edited", "added", "removed"
 
 
@@ -62,10 +70,27 @@ class Shot:
 
     def __init__(self, width: int, height: int, grey: bytes):
         self.width, self.height, self.grey = width, height, grey
+        self._rules: frozenset[int] | None = None
+
+    @property
+    def rules(self) -> frozenset[int]:
+        """세로로 거의 끝까지 이어지는 칸. 쪽 테두리·창 테두리·표 선이다.
+
+        **이걸 안 걸러 내면 도구가 통째로 망가진다.** 그 칸 때문에 모든
+        가로줄에 잉크가 있게 되어, 문서 전체가 글줄 하나로 뭉친다. 그러면
+        달라진 곳을 문서만큼 커다란 상자 하나로 표시해서 아무것도 못
+        알아본다. 한글 창을 실제로 찍었을 때 그렇게 됐다.
+        """
+        if self._rules is None:
+            self._rules = _find_rules(self)
+        return self._rules
 
     def row_has_ink(self, y: int) -> bool:
         row = self.grey[y * self.width:(y + 1) * self.width]
-        return any(v < INK for v in row)
+        rules = self.rules
+        if not rules:
+            return any(v < INK for v in row)
+        return any(v < INK for x, v in enumerate(row) if x not in rules)
 
     def columns(self, top: int, bottom: int) -> list[int]:
         """글줄 하나를 칸별로 훑어 어느 높이에 획이 있는지를 비트로 모은다.
@@ -76,11 +101,12 @@ class Shot:
         그대로다.
         """
         out = [0] * self.width
+        rules = self.rules
         for step, y in enumerate(range(top, bottom)):
             row = self.grey[y * self.width:(y + 1) * self.width]
             bit = 1 << step
             for x in range(self.width):
-                if row[x] < INK:
+                if row[x] < INK and x not in rules:
                     out[x] |= bit
         return out
 
@@ -146,6 +172,27 @@ def capture(left: int, top: int, width: int, height: int) -> Shot:
 
 
 # ------------------------------------------------------------------ 비교
+
+def _find_rules(shot: Shot) -> frozenset[int]:
+    """세로줄로 이어지는 칸을 찾는다. `Shot.rules` 가 부른다."""
+    # 몇 줄 건너뛰며 세도 충분하다. 선은 끝까지 이어지므로 표본으로 드러난다.
+    stride = max(1, shot.height // 150)
+    rows = range(0, shot.height, stride)
+    counts = [0] * shot.width
+    for y in rows:
+        row = shot.grey[y * shot.width:(y + 1) * shot.width]
+        for x, value in enumerate(row):
+            if value < INK:
+                counts[x] += 1
+
+    limit = len(list(rows)) * RULE
+    found = frozenset(x for x, n in enumerate(counts) if n >= limit)
+
+    # 걸러 낸 뒤 글자가 하나도 안 남으면 잘못 짚은 것이다. 그대로 둔다.
+    if found and all(x in found for x, n in enumerate(counts) if n):
+        return frozenset()
+    return found
+
 
 def bands(shot: Shot, gap: int = 4) -> list[tuple[int, int]]:
     """글자가 있는 가로 띠. 사이가 gap 줄 이하로 벌어지면 같은 글줄로 본다."""

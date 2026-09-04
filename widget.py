@@ -374,9 +374,33 @@ class Widget:
         def start():
             from tkinter import messagebox
             import compare_window
-            compare_window.run(self.root, messagebox.showinfo)
+            compare_window.run(self.root, messagebox.showinfo,
+                               hide=self._hide_self, show=self._show_self)
 
         self.root.after(120, start)
+
+    def _hide_self(self):
+        """고르는 동안 위젯을 감춘다.
+
+        위젯은 항상 위에 떠 있어서, 그대로 두면 화면을 찍을 때 **자기가
+        같이 찍힌다.** 실사용에서 바로 그렇게 나왔다.
+        """
+        self._was_at = (self.root.winfo_x(), self.root.winfo_y())
+        self.root.withdraw()
+        self.root.update()
+
+    def _show_self(self):
+        """다시 띄운다. `deiconify()` 는 창 꾸밈을 되돌려 놓으므로
+        테두리 없애기·항상 위·투명도·자리를 모두 다시 걸어 준다.
+        """
+        self.root.deiconify()
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", bool(self.config.get("on_top", True)))
+        self.root.attributes("-alpha",
+                             clamp_opacity(self.config.get("opacity", 0.96)))
+        if getattr(self, "_was_at", None):
+            self.root.geometry(f"+{self._was_at[0]}+{self._was_at[1]}")
+        self.root.update()
 
     def _menu(self, event):
         menu = tk.Menu(self.root, tearoff=0)

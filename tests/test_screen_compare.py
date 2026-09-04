@@ -148,6 +148,83 @@ class Finding(unittest.TestCase):
         self.assertTrue(rows[0].spans)
 
 
+def with_rules(lines, width=900, height=380, thickness=6, **kwargs):
+    """한글 창처럼 양옆에 세로 테두리가 있는 그림."""
+    shot = render(lines, width=width, height=height, **kwargs)
+    grey = bytearray(shot.grey)
+    for y in range(height):
+        for x in list(range(thickness)) + list(range(width - thickness, width)):
+            grey[y * width + x] = 90
+    return sc.Shot(width, height, bytes(grey))
+
+
+@unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
+class VerticalRules(unittest.TestCase):
+    """세로로 이어지는 선이 있으면 글줄 찾기가 통째로 무너진다.
+
+    한글 창에는 쪽 테두리와 창 테두리가 세로로 끝까지 이어진다. 그 칸
+    때문에 모든 가로줄에 잉크가 있게 되어 문서 전체가 글줄 하나로 뭉치고,
+    달라진 곳을 문서만 한 상자 하나로 표시해 아무것도 못 알아보게 된다.
+
+    실사용에서 처음 써 보셨을 때 바로 이것 때문에 "아무것도 표시되지
+    않는다" 가 됐다. 표는 세로선이 더 많으니 그대로 두면 늘 이렇다.
+    """
+
+    def test_rules_are_found(self):
+        found = with_rules(BEFORE).rules
+        self.assertTrue(found)
+        self.assertLessEqual(max(found), 899)
+        self.assertIn(0, found)
+
+    def test_lines_are_still_counted_right(self):
+        self.assertEqual(len(sc.bands(with_rules(BEFORE))), len(BEFORE))
+
+    def test_the_answer_matches_the_borderless_case(self):
+        after = list(BEFORE)
+        after[4] = ("1. 관련: 예시중학교-2949(2026. 5. 14., "
+                    "“2026 학교교육계획”)호")
+        plain = changed(sc.compare(render(BEFORE), render(after)))
+        ruled = changed(sc.compare(with_rules(BEFORE), with_rules(after)))
+        self.assertEqual([(c.state, c.top, c.bottom, c.spans) for c in plain],
+                         [(c.state, c.top, c.bottom, c.spans) for c in ruled])
+
+    def test_marks_never_swallow_the_whole_picture(self):
+        """상자가 그림 높이만큼 커지면 표시가 아니라 테두리다."""
+        after = list(BEFORE)
+        after[4] = ("1. 관련: 예시중학교-2949(2026. 5. 14., "
+                    "“2026 학교교육계획”)호")
+        shot = with_rules(after)
+        for mark in changed(sc.compare(with_rules(BEFORE), shot)):
+            with self.subTest(mark=mark):
+                self.assertLess(mark.bottom - mark.top, shot.height // 3,
+                                "글줄 하나보다 훨씬 큽니다. 글줄이 뭉쳤습니다.")
+
+    def test_same_content_with_rules_is_quiet(self):
+        rows = sc.compare(with_rules(BEFORE, left=12), with_rules(BEFORE, left=45))
+        self.assertEqual(changed(rows), [])
+
+    def test_a_short_pick_keeps_its_letters(self):
+        """한 줄만 바짝 잘라 골라도 글자가 살아 있어야 한다."""
+        shot = render(BEFORE[:1], width=300, height=24, step=24)
+        self.assertEqual(shot.rules, frozenset(), "글자를 선으로 봤습니다")
+        self.assertTrue(sc.bands(shot), "글줄이 사라졌습니다")
+
+    def test_it_backs_off_when_everything_looks_like_a_rule(self):
+        """다 지워질 판이면 잘못 짚은 것이다. 그대로 두고 넘어간다.
+
+        선만 있는 그림(표 눈금만 걸린 자리 따위)을 만나면 잉크가 하나도
+        안 남아 글줄을 못 찾는다. 그럴 바엔 거르지 않는 편이 낫다.
+        """
+        width, height = 80, 100
+        grey = bytearray([255] * (width * height))
+        for y in range(height):                 # 세로선 세 개뿐인 그림
+            for x in (10, 11, 40, 41, 70, 71):
+                grey[y * width + x] = 60
+        shot = sc.Shot(width, height, bytes(grey))
+        self.assertEqual(shot.rules, frozenset(),
+                         "다 지워 놓고 글줄이 없다고 하면 안 됩니다")
+
+
 class Privacy(unittest.TestCase):
     """찍은 화면이 어디에도 남지 않아야 한다.
 

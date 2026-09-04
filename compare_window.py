@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import ctypes
 import struct
+import time
 import tkinter as tk
 import zlib
 
@@ -30,6 +31,9 @@ import screen_compare
 
 # 고를 때 화면을 덮는 막의 짙기. 너무 짙으면 무엇을 고르는지 안 보인다.
 VEIL = 0.28
+
+# 막을 걷고 화면이 다시 그려지기를 기다리는 시간(초).
+SETTLE = 0.15
 
 # 표시 상자를 글자에서 이만큼 띄운다.
 MARGIN = 3
@@ -49,6 +53,7 @@ class _Picker:
 
     def __init__(self, root: tk.Misc, message: str):
         left, top, width, height = _virtual_screen()
+        self.root = root
         self.origin = (left, top)
         self.start = None
         self.picked = None
@@ -101,8 +106,16 @@ class _Picker:
         self.window.wait_window()
         if not self.picked:
             return None
+
+        # 막이 화면에서 실제로 걷힐 때까지 기다린다. `destroy()` 는 요청일
+        # 뿐이라, 바로 찍으면 그 아래가 아니라 막이 덮인 화면이 찍힌다.
+        # 윈도우가 가려졌던 자리를 다시 그릴 틈을 줘야 한다.
+        self.root.update_idletasks()
+        self.root.update()
+        time.sleep(SETTLE)
+        self.root.update()
+
         left, top, width, height = self.picked
-        # 막을 이미 걷어 낸 뒤라야 그 아래가 찍힌다.
         return screen_compare.capture(self.origin[0] + left,
                                       self.origin[1] + top, width, height)
 
@@ -151,11 +164,16 @@ class _Result:
         canvas = tk.Canvas(holder, width=view[0], height=view[1],
                            highlightthickness=0, bg="white",
                            scrollregion=(0, 0, shot.width, shot.height))
-        canvas.pack(side="left", fill="both", expand=True)
-        if shot.height > view[1]:
-            bar = tk.Scrollbar(holder, orient="vertical", command=canvas.yview)
-            bar.pack(side="right", fill="y")
-            canvas.configure(yscrollcommand=bar.set)
+        # 실제로 찍은 화면은 창보다 넓고 높다. 가로도 움직일 수 있어야 한다 —
+        # 세로만 있으면 오른쪽에 있는 표시를 영영 못 본다.
+        down = tk.Scrollbar(holder, orient="vertical", command=canvas.yview)
+        across = tk.Scrollbar(holder, orient="horizontal", command=canvas.xview)
+        canvas.configure(yscrollcommand=down.set, xscrollcommand=across.set)
+        down.grid(row=0, column=1, sticky="ns")
+        across.grid(row=1, column=0, sticky="ew")
+        canvas.grid(row=0, column=0, sticky="nsew")
+        holder.rowconfigure(0, weight=1)
+        holder.columnconfigure(0, weight=1)
 
         # PhotoImage 는 참조가 끊기면 그림이 사라진다. 창에 붙들어 둔다.
         self.image = tk.PhotoImage(data=_as_png(shot))
@@ -198,19 +216,30 @@ class _Result:
                                     outline="#c81e1e", width=2)
 
 
-def run(root: tk.Misc, warn) -> None:
+def run(root: tk.Misc, warn, hide=None, show=None) -> None:
     """원본 → 수정본 순서로 고르게 하고 결과를 띄운다.
 
     `warn(제목, 내용)` 은 알릴 때 부르는 함수. 창을 띄우는 방식을 위젯이
     정하도록 넘겨받는다.
+
+    `hide` / `show` 는 고르는 동안 위젯을 감췄다 되돌리는 함수. 위젯은
+    항상 위에 떠 있어서, 그대로 두면 화면을 찍을 때 **자기가 같이 찍힌다.**
+    실사용에서 바로 그렇게 됐다. 감추는 방법은 위젯이 정하도록 넘겨받는다
+    — 투명도·항상 위 설정을 되돌려 놓는 일은 위젯의 몫이다.
     """
     try:
-        before = _Picker(root, "① 원본(기안한 것) 쪽을 끌어 주세요").run()
-        if before is None:
-            return
-        after = _Picker(root, "② 수정본(결재된 것) 쪽을 끌어 주세요").run()
-        if after is None:
-            return
+        if hide:
+            hide()
+        try:
+            before = _Picker(root, "① 원본(기안한 것) 쪽을 끌어 주세요").run()
+            if before is None:
+                return
+            after = _Picker(root, "② 수정본(결재된 것) 쪽을 끌어 주세요").run()
+            if after is None:
+                return
+        finally:
+            if show:
+                show()
         changes = screen_compare.compare(before, after)
     except screen_compare.ScreenError as exc:
         warn("결재 전후 비교", str(exc))

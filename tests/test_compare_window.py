@@ -79,6 +79,74 @@ class Headline(unittest.TestCase):
 
 
 @unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
+class HidingTheWidget(unittest.TestCase):
+    """고르는 동안 위젯이 감춰져야 한다.
+
+    위젯은 항상 위에 떠 있다. 그대로 두면 화면을 찍을 때 자기가 같이
+    찍혀서, 결과 그림 한구석에 위젯이 박혀 나온다. 실사용에서 그랬다.
+    """
+
+    def setUp(self):
+        self.log = []
+        self.picks = [object(), object()]
+
+        class FakePicker:
+            def __init__(inner, root, message):
+                self.log.append("고르기")
+
+            def run(inner):
+                return self.picks.pop(0) if self.picks else None
+
+        self.real = (cw._Picker, cw._Result, cw.screen_compare.compare)
+        cw._Picker = FakePicker
+        cw._Result = lambda root, shot, changes: self.log.append("결과")
+        cw.screen_compare.compare = lambda before, after: []
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        cw._Picker, cw._Result, cw.screen_compare.compare = self.real
+
+    def test_hidden_before_picking_and_back_before_the_result(self):
+        cw.run(None, lambda *_: None,
+               hide=lambda: self.log.append("감춤"),
+               show=lambda: self.log.append("되돌림"))
+        self.assertEqual(self.log,
+                         ["감춤", "고르기", "고르기", "되돌림", "결과"])
+
+    def test_it_comes_back_even_if_the_user_gives_up(self):
+        """Esc 로 그만둬도 위젯이 사라진 채 남으면 안 된다."""
+        self.picks = [None]
+        cw.run(None, lambda *_: None,
+               hide=lambda: self.log.append("감춤"),
+               show=lambda: self.log.append("되돌림"))
+        self.assertEqual(self.log, ["감춤", "고르기", "되돌림"])
+
+    def test_it_comes_back_even_if_capturing_blows_up(self):
+        def boom(root, message):
+            raise cw.screen_compare.ScreenError("찍지 못했습니다")
+        cw._Picker = boom
+        said = []
+        cw.run(None, lambda title, text: said.append(text),
+               hide=lambda: self.log.append("감춤"),
+               show=lambda: self.log.append("되돌림"))
+        self.assertEqual(self.log, ["감춤", "되돌림"])
+        self.assertTrue(said, "무엇이 잘못됐는지 알려 줘야 합니다")
+
+    def test_the_widget_knows_how_to_hide_and_come_back(self):
+        source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        self.assertIn("hide=self._hide_self", source)
+        self.assertIn("show=self._show_self", source)
+        # deiconify 는 창 꾸밈을 되돌려 놓는다. 다시 걸어 주지 않으면
+        # 위젯에 제목 표시줄이 생기고 투명도가 풀린다.
+        back = source[source.index("def _show_self"):]
+        back = back[:back.index("\n    def ", 10)]
+        for needed in ("deiconify", "overrideredirect", "-topmost",
+                       "-alpha", "geometry"):
+            with self.subTest(needed=needed):
+                self.assertIn(needed, back)
+
+
+@unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
 class Privacy(unittest.TestCase):
     """찍은 화면이 파일로 새지 않아야 한다. `screen_compare` 와 같은 규칙."""
 
@@ -92,14 +160,26 @@ class Privacy(unittest.TestCase):
                                  f"찍은 화면이 나갈 길이 생겼습니다: {forbidden}")
 
     def test_the_veil_is_lifted_before_capturing(self):
-        """막이 덮인 채로 찍으면 까만 그림만 남는다.
+        """막이 덮인 채로 찍으면 그 아래가 아니라 막이 찍힌다.
 
-        `_Picker.run()` 은 창이 닫히기를 기다린 뒤에 찍어야 한다.
+        `destroy()` 는 요청일 뿐이라, 창이 닫히기를 기다리는 것만으로는
+        모자라다. 윈도우가 가려졌던 자리를 다시 그릴 틈까지 줘야 한다.
         """
         source = self.SOURCE
         wait = source.index("self.window.wait_window()")
+        settle = source.index("time.sleep(SETTLE)")
         shoot = source.index("screen_compare.capture(")
-        self.assertLess(wait, shoot, "막을 걷기 전에 찍고 있습니다")
+        self.assertLess(wait, settle, "막을 걷기 전에 기다리고 있습니다")
+        self.assertLess(settle, shoot, "화면이 다시 그려지기 전에 찍습니다")
+        self.assertGreaterEqual(cw.SETTLE, 0.05, "기다리는 시간이 너무 짧습니다")
+
+    def test_the_result_can_be_scrolled_both_ways(self):
+        """실제로 찍은 화면은 창보다 넓다. 가로로도 움직일 수 있어야 한다.
+
+        세로만 있으면 오른쪽에 그려진 빨간 상자를 영영 못 본다.
+        """
+        self.assertIn('orient="horizontal"', self.SOURCE)
+        self.assertIn("xscrollcommand", self.SOURCE)
 
 
 if __name__ == "__main__":
