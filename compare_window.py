@@ -48,6 +48,37 @@ def _virtual_screen() -> tuple[int, int, int, int]:
     return metric(76), metric(77), metric(78), metric(79)
 
 
+def _grab_focus(window: tk.Misc) -> None:
+    """이 창에 키보드 초점을 확실히 가져온다. 안 되면 조용히 넘어간다.
+
+    Esc 가 안 듣는다는 말씀이 있었다. 테두리 없는 창은 윈도우가 키보드
+    초점을 순순히 주지 않는데, 특히 **위젯을 감춘 직후** 가 그렇다 —
+    창이 사라지면 초점이 다른 프로그램으로 넘어가고, 포그라운드가 아닌
+    프로세스는 제 창을 앞으로 세우지 못하게 윈도우가 막는다.
+
+    지금 앞에 선 창의 입력 대기줄에 잠깐 붙었다가(`AttachThreadInput`)
+    초점을 넘겨받는다. `app.py` 가 탐색기 창을 앞으로 끌어올릴 때 쓰는
+    것과 같은 방법이다. 실패해도 오른쪽 버튼으로 그만둘 수 있으므로
+    막다른 길이 되지는 않는다.
+    """
+    try:
+        user32 = ctypes.windll.user32
+        handle = window.winfo_id()
+        mine = ctypes.windll.kernel32.GetCurrentThreadId()
+        front = user32.GetForegroundWindow()
+        theirs = user32.GetWindowThreadProcessId(front, None)
+        joined = bool(theirs and theirs != mine
+                      and user32.AttachThreadInput(theirs, mine, True))
+        try:
+            user32.SetForegroundWindow(handle)
+            user32.SetFocus(handle)
+        finally:
+            if joined:
+                user32.AttachThreadInput(theirs, mine, False)
+    except Exception:  # noqa: BLE001 — 못 가져와도 진행은 된다
+        pass
+
+
 class _Picker:
     """화면을 살짝 덮고 사각형 하나를 끌게 한다."""
 
@@ -69,15 +100,35 @@ class _Picker:
                                 cursor="crosshair")
         self.canvas.pack(fill="both", expand=True)
         self.canvas.create_text(
-            width // 2, 40, fill="white", font=("맑은 고딕", 15),
-            text=f"{message}    (그만두려면 Esc)")
+            width // 2, 44, fill="white", font=("맑은 고딕", 16),
+            text=message)
+        self.canvas.create_text(
+            width // 2, 78, fill="#D8D8D8", font=("맑은 고딕", 11),
+            text="종이의 좌우가 다 들어오게 넉넉히 끌어 주세요. "
+                 "잘린 쪽은 견줄 수 없어 달라진 것으로 나옵니다.")
+        self.canvas.create_text(
+            width // 2, 104, fill="#B8B8B8", font=("맑은 고딕", 11),
+            text="그만두려면  Esc  또는  마우스 오른쪽 버튼")
 
         self.canvas.bind("<Button-1>", self._down)
         self.canvas.bind("<B1-Motion>", self._move)
         self.canvas.bind("<ButtonRelease-1>", self._up)
-        self.window.bind("<Escape>", lambda _event: self._finish())
+
+        # Esc 가 안 듣는다는 말씀이 있었는데 이 컴퓨터에서는 재현하지
+        # 못했다. 짚이는 것은 키보드 초점이라 아래 `_grab_focus` 로
+        # 확실히 가져오지만, 확인하지 못한 이상 길을 하나만 두지 않는다.
+        #
+        # 창에만 걸어도 캔버스에서 이벤트가 올라와 듣는 것은 확인했다.
+        # 캔버스와 루트에 함께 거는 것은 그래도 모를 경우의 보험이다.
+        # **오른쪽 버튼은 초점과 무관하게 듣는다** — 초점이 원인이라면
+        # 이 길은 무슨 일이 있어도 열려 있다.
+        for target in (self.window, self.canvas, root):
+            target.bind("<Escape>", lambda _event: self._finish())
+        self.canvas.bind("<Button-3>", lambda _event: self._finish())
+
         self.window.focus_force()
         self.canvas.focus_set()
+        _grab_focus(self.window)
 
     def _down(self, event):
         # 그리는 자리는 tkinter 좌표, 찍을 자리는 윈도우 좌표. 둘을 따로

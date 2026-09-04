@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import struct
 import sys
 import unittest
@@ -213,6 +214,68 @@ class HidingTheWidget(unittest.TestCase):
                        "-alpha", "geometry"):
             with self.subTest(needed=needed):
                 self.assertIn(needed, back)
+
+
+@unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
+class GivingUp(unittest.TestCase):
+    """고르다 그만둘 길이 막히면 안 된다.
+
+    Esc 가 안 듣는다는 말씀이 있었다. 테두리 없는 창은 윈도우가 키보드
+    초점을 순순히 주지 않는데, 특히 위젯을 감춘 직후가 그렇다. 그래서
+    초점을 확실히 가져오되, 초점과 무관한 길도 함께 둔다.
+    """
+
+    def setUp(self):
+        import tkinter as tk
+        try:
+            self.root = tk.Tk()
+        except Exception as exc:            # noqa: BLE001 — 화면이 없는 환경
+            self.skipTest(f"창을 띄울 수 없습니다: {exc}")
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+
+    def close_with(self, sequence):
+        picker = cw._Picker(self.root, "① 원본 쪽을 끌어 주세요")
+        self.root.update()
+        picker.canvas.event_generate(sequence, when="now")
+        self.root.update()
+        alive = bool(picker.window.winfo_exists())
+        if alive:
+            picker.window.destroy()
+        return not alive
+
+    def test_escape_closes_it(self):
+        self.assertTrue(self.close_with("<Escape>"), "Esc 가 듣지 않습니다")
+
+    def test_the_right_button_closes_it_too(self):
+        """키보드 초점이 없어도 듣는 길. Esc 가 막혔을 때의 대비다."""
+        self.assertTrue(self.close_with("<Button-3>"),
+                        "오른쪽 버튼이 듣지 않습니다")
+
+    def test_it_takes_the_keyboard_focus(self):
+        picker = cw._Picker(self.root, "① 원본 쪽을 끌어 주세요")
+        self.root.update()
+        try:
+            front = ctypes.windll.user32.GetForegroundWindow()
+            self.assertEqual(front, picker.window.winfo_id(),
+                             "막이 앞에 서지 못했습니다")
+            self.assertIsNotNone(picker.window.focus_get())
+        finally:
+            picker.window.destroy()
+
+    def test_the_hint_says_how_to_drag_and_how_to_quit(self):
+        picker = cw._Picker(self.root, "① 원본 쪽을 끌어 주세요")
+        self.root.update()
+        try:
+            said = " ".join(
+                picker.canvas.itemcget(item, "text")
+                for item in picker.canvas.find_all()
+                if picker.canvas.type(item) == "text")
+        finally:
+            picker.window.destroy()
+        self.assertIn("좌우가 다 들어오게", said, "끄는 요령이 없습니다")
+        self.assertIn("Esc", said)
+        self.assertIn("오른쪽 버튼", said)
 
 
 @unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
