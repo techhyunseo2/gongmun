@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+from ctypes import wintypes
 import struct
 import time
 import tkinter as tk
@@ -46,6 +47,34 @@ def _virtual_screen() -> tuple[int, int, int, int]:
     """모니터 여러 대를 합친 전체 화면 범위. 두 창이 다른 모니터에 있어도 되게."""
     metric = ctypes.windll.user32.GetSystemMetrics
     return metric(76), metric(77), metric(78), metric(79)
+
+
+class _Box(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("whole", _Box), ("work", _Box),
+                ("flags", wintypes.DWORD)]
+
+
+def _monitor_at(x: int, y: int) -> tuple[int, int, int, int]:
+    """그 자리가 속한 모니터 한 대의 범위. 작업 표시줄은 뺀 값.
+
+    창을 화면 **전체** 한가운데 두면 안 된다. 모니터 두 대를 쓰면 그
+    한가운데가 바로 두 화면이 갈리는 자리라, 안내가 반씩 잘려 읽기
+    어렵다. 선생님들 대부분이 두 대를 쓰신다.
+    """
+    user32 = ctypes.windll.user32
+    point = wintypes.POINT(x, y)
+    handle = user32.MonitorFromPoint(point, 2)      # 가장 가까운 모니터
+    info = _MonitorInfo()
+    info.cbSize = ctypes.sizeof(_MonitorInfo)
+    if not user32.GetMonitorInfoW(handle, ctypes.byref(info)):
+        return _virtual_screen()
+    work = info.work
+    return work.left, work.top, work.right - work.left, work.bottom - work.top
 
 
 def _grab_focus(window: tk.Misc) -> None:
@@ -79,6 +108,79 @@ def _grab_focus(window: tk.Misc) -> None:
         pass
 
 
+class _Notice:
+    """고르기 전에 무엇을 할지 알려 주는 창. 확인을 누르면 넘어간다.
+
+    안내를 막 위에 얹지 않고 창으로 뺀 이유는 모니터가 두 대이기
+    때문이다. 화면 한가운데는 곧 두 화면이 갈리는 자리라 글이 반씩
+    잘렸다. 이 창은 **마우스가 있는 모니터 안** 에 뜨므로 걸치지 않는다.
+    """
+
+    def __init__(self, root: tk.Misc, step: str):
+        self.ok = False
+        self.window = tk.Toplevel(root)
+        self.window.title("결재 전후 비교")
+        self.window.resizable(False, False)
+
+        frame = tk.Frame(self.window, padx=22, pady=18)
+        frame.pack(fill="both", expand=True)
+        tk.Label(frame, text=step, font=("맑은 고딕", 13, "bold"),
+                 anchor="w", justify="left").pack(fill="x")
+        tk.Label(frame, anchor="w", justify="left", wraplength=380,
+                 font=("맑은 고딕", 10), pady=10,
+                 text="종이의 좌우가 다 들어오게 넉넉히 끌어 주세요.\n"
+                      "잘린 쪽은 비교할 수 없으므로 달라진 것으로 나옵니다."
+                 ).pack(fill="x")
+        tk.Label(frame, anchor="w", font=("맑은 고딕", 10), fg="#5C685F",
+                 text="그만두려면  Esc  또는  마우스 오른쪽 버튼").pack(fill="x")
+
+        buttons = tk.Frame(frame, pady=14)
+        buttons.pack(fill="x")
+        go = tk.Button(buttons, text="확인", width=10, command=self._go)
+        go.pack(side="right")
+        tk.Button(buttons, text="그만두기", width=10,
+                  command=self.window.destroy).pack(side="right", padx=(0, 8))
+
+        self.window.bind("<Escape>", lambda _event: self.window.destroy())
+        self.window.bind("<Return>", lambda _event: self._go())
+        self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
+
+        # `transient` 는 쓰지 않는다. 부모가 숨겨져 있으면 딸린 창도 같이
+        # 숨는데, 여기서는 고르는 동안 위젯을 감추므로 안내창이 아예 안
+        # 뜬다. 자리를 잡은 뒤에 부르면 창을 부모 쪽으로 도로 옮기기도
+        # 한다 — 왼쪽 모니터에 두려던 창이 오른쪽으로 끌려갔다.
+        self.window.attributes("-topmost", True)
+        self.window.update_idletasks()
+        self._centre()
+        # `grab_set` 은 쓰지 않는다. 고르는 동안 위젯은 어차피 감춰져 있어
+        # 막을 것이 없는데, 모달 잠금이 남으면 다음 창이 열리지 못하고
+        # 멈춘다(시험에서 실제로 걸렸다). 맨 위에 두는 것으로 충분하다.
+        go.focus_set()
+        _grab_focus(self.window)
+
+    def _centre(self):
+        """마우스가 있는 모니터 한가운데. 경계선에 걸치지 않게."""
+        left, top, width, height = _monitor_at(*screen_compare.cursor_at())
+        mine = self.window.winfo_reqwidth(), self.window.winfo_reqheight()
+        x = left + (width - mine[0]) // 2
+        y = top + (height - mine[1]) // 2
+        # 왼쪽에 붙인 모니터는 x 가 음수다. 반드시 `+-1339` 꼴로 적는다 —
+        # `-1339` 로 적으면 Tk 가 "오른쪽 끝에서 1339" 로 읽어 반대편으로
+        # 보낸다. f-string 이 알아서 `+-1339` 를 만들어 준다.
+        self.window.geometry(f"+{x}+{y}")
+
+    def _go(self):
+        self.ok = True
+        self.window.destroy()
+
+    def run(self) -> bool:
+        try:
+            self.window.wait_window()
+        except tk.TclError:      # 이미 닫혔으면 기다릴 것이 없다
+            pass
+        return self.ok
+
+
 class _Picker:
     """화면을 살짝 덮고 사각형 하나를 끌게 한다."""
 
@@ -99,16 +201,8 @@ class _Picker:
         self.canvas = tk.Canvas(self.window, bg="black", highlightthickness=0,
                                 cursor="crosshair")
         self.canvas.pack(fill="both", expand=True)
-        self.canvas.create_text(
-            width // 2, 44, fill="white", font=("맑은 고딕", 16),
-            text=message)
-        self.canvas.create_text(
-            width // 2, 78, fill="#D8D8D8", font=("맑은 고딕", 11),
-            text="종이의 좌우가 다 들어오게 넉넉히 끌어 주세요. "
-                 "잘린 쪽은 견줄 수 없어 달라진 것으로 나옵니다.")
-        self.canvas.create_text(
-            width // 2, 104, fill="#B8B8B8", font=("맑은 고딕", 11),
-            text="그만두려면  Esc  또는  마우스 오른쪽 버튼")
+        # 막에는 글을 얹지 않는다. 화면 한가운데에 두면 모니터 두 대를
+        # 쓰실 때 경계선에 걸려 반씩 잘린다. 안내는 앞서 뜨는 창이 맡는다.
 
         self.canvas.bind("<Button-1>", self._down)
         self.canvas.bind("<B1-Motion>", self._move)
@@ -270,6 +364,13 @@ class _Result:
                                     outline="#c81e1e", width=2)
 
 
+def _pick(root: tk.Misc, step: str) -> screen_compare.Shot | None:
+    """무엇을 고를지 알려 주고, 확인을 누르면 고르게 한다."""
+    if not _Notice(root, step).run():
+        return None
+    return _Picker(root, step).run()
+
+
 def run(root: tk.Misc, warn, hide=None, show=None) -> None:
     """원본 → 수정본 순서로 고르게 하고 결과를 띄운다.
 
@@ -285,10 +386,10 @@ def run(root: tk.Misc, warn, hide=None, show=None) -> None:
         if hide:
             hide()
         try:
-            before = _Picker(root, "① 원본(기안한 것) 쪽을 끌어 주세요").run()
+            before = _pick(root, "① 원본(기안한 것) 쪽을 끌어 주세요")
             if before is None:
                 return
-            after = _Picker(root, "② 수정본(결재된 것) 쪽을 끌어 주세요").run()
+            after = _pick(root, "② 수정본(결재된 것) 쪽을 끌어 주세요")
             if after is None:
                 return
         finally:

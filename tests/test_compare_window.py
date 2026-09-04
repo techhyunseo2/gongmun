@@ -165,7 +165,17 @@ class HidingTheWidget(unittest.TestCase):
                 return self.picks.pop(0) if self.picks else None
 
         self.real = (cw._Picker, cw._Result, cw.screen_compare.compare,
-                     cw.screen_compare.prepare)
+                     cw.screen_compare.prepare, cw._Notice)
+        # 안내창도 바꿔 두지 않으면 진짜 창이 떠서 영원히 기다린다.
+        class SaysYes:
+            def __init__(inner, root, step):
+                self.log.append("안내")
+
+            def run(inner):
+                return self.notice_says_yes
+
+        self.notice_says_yes = True
+        cw._Notice = SaysYes
         cw._Picker = FakePicker
         cw._Result = lambda root, shot, changes: self.log.append("결과")
         cw.screen_compare.compare = lambda before, after: []
@@ -174,14 +184,15 @@ class HidingTheWidget(unittest.TestCase):
 
     def restore(self):
         (cw._Picker, cw._Result, cw.screen_compare.compare,
-         cw.screen_compare.prepare) = self.real
+         cw.screen_compare.prepare, cw._Notice) = self.real
 
     def test_hidden_before_picking_and_back_before_the_result(self):
         cw.run(None, lambda *_: None,
                hide=lambda: self.log.append("감춤"),
                show=lambda: self.log.append("되돌림"))
         self.assertEqual(self.log,
-                         ["감춤", "고르기", "고르기", "되돌림", "결과"])
+                         ["감춤", "안내", "고르기", "안내", "고르기",
+                          "되돌림", "결과"])
 
     def test_it_comes_back_even_if_the_user_gives_up(self):
         """Esc 로 그만둬도 위젯이 사라진 채 남으면 안 된다."""
@@ -189,7 +200,7 @@ class HidingTheWidget(unittest.TestCase):
         cw.run(None, lambda *_: None,
                hide=lambda: self.log.append("감춤"),
                show=lambda: self.log.append("되돌림"))
-        self.assertEqual(self.log, ["감춤", "고르기", "되돌림"])
+        self.assertEqual(self.log, ["감춤", "안내", "고르기", "되돌림"])
 
     def test_it_comes_back_even_if_capturing_blows_up(self):
         def boom(root, message):
@@ -199,8 +210,16 @@ class HidingTheWidget(unittest.TestCase):
         cw.run(None, lambda title, text: said.append(text),
                hide=lambda: self.log.append("감춤"),
                show=lambda: self.log.append("되돌림"))
-        self.assertEqual(self.log, ["감춤", "되돌림"])
+        self.assertEqual(self.log, ["감춤", "안내", "되돌림"])
         self.assertTrue(said, "무엇이 잘못됐는지 알려 줘야 합니다")
+
+    def test_saying_no_at_the_notice_stops_there(self):
+        """안내창에서 그만두면 고르기까지 가지 않고, 위젯은 돌아온다."""
+        self.notice_says_yes = False
+        cw.run(None, lambda *_: None,
+               hide=lambda: self.log.append("감춤"),
+               show=lambda: self.log.append("되돌림"))
+        self.assertEqual(self.log, ["감춤", "안내", "되돌림"])
 
     def test_the_widget_knows_how_to_hide_and_come_back(self):
         source = (ROOT / "widget.py").read_text(encoding="utf-8")
@@ -214,6 +233,100 @@ class HidingTheWidget(unittest.TestCase):
                        "-alpha", "geometry"):
             with self.subTest(needed=needed):
                 self.assertIn(needed, back)
+
+
+@unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
+class Notice(unittest.TestCase):
+    """고르기 전에 뜨는 안내창.
+
+    안내를 어두운 막 위에 얹었더니 모니터 두 대를 쓰시는 분들에게 글이
+    반씩 잘렸다. 화면 전체의 한가운데가 곧 두 화면이 갈리는 자리이기
+    때문이다. 선생님들 대부분이 두 대를 쓰신다.
+    """
+
+    def setUp(self):
+        import tkinter as tk
+        try:
+            self.root = tk.Tk()
+        except Exception as exc:            # noqa: BLE001 — 화면이 없는 환경
+            self.skipTest(f"창을 띄울 수 없습니다: {exc}")
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+
+    def open(self, step="① 원본(기안한 것) 쪽을 끌어 주세요"):
+        notice = cw._Notice(self.root, step)
+        self.root.update()
+        self.addCleanup(lambda: notice.window.winfo_exists()
+                        and notice.window.destroy())
+        return notice
+
+    def test_it_fits_inside_one_monitor(self):
+        notice = self.open()
+        left, top, width, height = cw._monitor_at(*sc.cursor_at())
+        x, y = notice.window.winfo_x(), notice.window.winfo_y()
+        wide, high = notice.window.winfo_width(), notice.window.winfo_height()
+        self.assertGreaterEqual(x, left)
+        self.assertGreaterEqual(y, top)
+        self.assertLessEqual(x + wide, left + width)
+        self.assertLessEqual(y + high, top + height)
+
+    def test_it_never_straddles_the_seam_between_monitors(self):
+        """화면 전체의 한가운데가 바로 두 화면이 갈리는 자리다."""
+        notice = self.open()
+        whole = cw._virtual_screen()
+        seam = whole[0] + whole[2] // 2
+        x, wide = notice.window.winfo_x(), notice.window.winfo_width()
+        if whole[2] > 2000:                 # 모니터가 한 대뿐이면 볼 것이 없다
+            self.assertFalse(x < seam < x + wide, "경계선을 가로지릅니다")
+
+    def test_it_is_actually_visible(self):
+        """부모(위젯)가 감춰진 채로 뜨므로 딸린 창으로 만들면 안 된다.
+
+        `transient()` 를 쓰면 부모가 숨어 있을 때 이 창도 같이 숨는다.
+        고르는 동안 위젯을 감추므로 안내창이 아예 안 뜨게 된다.
+        """
+        self.assertTrue(self.open().window.winfo_viewable())
+        self.assertNotIn(".transient(", (ROOT / "compare_window.py")
+                         .read_text(encoding="utf-8"),
+                         "딸린 창으로 만들면 부모가 숨을 때 같이 숨습니다")
+
+    def test_confirm_goes_ahead_and_giving_up_does_not(self):
+        going = self.open()
+        going._go()
+        self.assertTrue(going.run())
+        quitting = self.open()
+        quitting.window.destroy()
+        self.assertFalse(quitting.run())
+
+    def test_it_says_how_to_drag_and_how_to_quit(self):
+        import tkinter as tk
+        notice = self.open()
+        said = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, (tk.Label, tk.Button)):
+                    said.append(child.cget("text"))
+                walk(child)
+
+        walk(notice.window)
+        joined = " ".join(said)
+        self.assertIn("좌우가 다 들어오게", joined)
+        self.assertIn("비교할 수 없으므로", joined)
+        self.assertIn("Esc", joined)
+        self.assertIn("오른쪽 버튼", joined)
+        self.assertIn("확인", joined)
+
+    def test_the_veil_carries_no_words_any_more(self):
+        """막 위의 글이 경계선에 걸리던 것이 애초의 문제였다."""
+        picker = cw._Picker(self.root, "① 원본 쪽을 끌어 주세요")
+        self.root.update()
+        try:
+            words = [item for item in picker.canvas.find_all()
+                     if picker.canvas.type(item) == "text"]
+        finally:
+            picker.window.destroy()
+        self.assertEqual(words, [], "막에 아직 글이 남아 있습니다")
 
 
 @unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
@@ -262,20 +375,6 @@ class GivingUp(unittest.TestCase):
             self.assertIsNotNone(picker.window.focus_get())
         finally:
             picker.window.destroy()
-
-    def test_the_hint_says_how_to_drag_and_how_to_quit(self):
-        picker = cw._Picker(self.root, "① 원본 쪽을 끌어 주세요")
-        self.root.update()
-        try:
-            said = " ".join(
-                picker.canvas.itemcget(item, "text")
-                for item in picker.canvas.find_all()
-                if picker.canvas.type(item) == "text")
-        finally:
-            picker.window.destroy()
-        self.assertIn("좌우가 다 들어오게", said, "끄는 요령이 없습니다")
-        self.assertIn("Esc", said)
-        self.assertIn("오른쪽 버튼", said)
 
 
 @unittest.skipUnless(WINDOWS, "화면 비교는 윈도우에서만 됩니다")
