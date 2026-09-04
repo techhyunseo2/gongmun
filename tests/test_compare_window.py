@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import gc
 import struct
 import sys
 import unittest
@@ -251,6 +252,11 @@ class Notice(unittest.TestCase):
         except Exception as exc:            # noqa: BLE001 — 화면이 없는 환경
             self.skipTest(f"창을 띄울 수 없습니다: {exc}")
         self.root.withdraw()
+        # 창을 지운 뒤 **메인 스레드에서** 조각까지 치운다. 안 그러면
+        # 남은 조각이 나중에 다른 스레드(예: 시험용 HTTP 서버)에서
+        # 수거되면서 `Tcl_AsyncDelete` 로 파이썬이 통째로 터진다.
+        # 간헐적이라 CI 가 이따금 붉어진다.
+        self.addCleanup(gc.collect)
         self.addCleanup(self.root.destroy)
 
     def open(self, step="① 원본(기안한 것) 쪽을 끌어 주세요"):
@@ -345,6 +351,11 @@ class GivingUp(unittest.TestCase):
         except Exception as exc:            # noqa: BLE001 — 화면이 없는 환경
             self.skipTest(f"창을 띄울 수 없습니다: {exc}")
         self.root.withdraw()
+        # 창을 지운 뒤 **메인 스레드에서** 조각까지 치운다. 안 그러면
+        # 남은 조각이 나중에 다른 스레드(예: 시험용 HTTP 서버)에서
+        # 수거되면서 `Tcl_AsyncDelete` 로 파이썬이 통째로 터진다.
+        # 간헐적이라 CI 가 이따금 붉어진다.
+        self.addCleanup(gc.collect)
         self.addCleanup(self.root.destroy)
 
     def close_with(self, sequence):
