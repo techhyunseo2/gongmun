@@ -148,11 +148,15 @@ class Finding(unittest.TestCase):
         self.assertTrue(rows[0].spans)
 
 
-def with_rules(lines, width=900, height=380, thickness=6, **kwargs):
-    """한글 창처럼 양옆에 세로 테두리가 있는 그림."""
+def with_rules(lines, width=900, height=380, thickness=6, covers=1.0, **kwargs):
+    """한글 창처럼 양옆에 세로 테두리가 있는 그림.
+
+    `covers` 는 테두리가 그림 높이의 얼마를 차지하는지. 고른 자리가
+    테두리보다 넓으면 1.0 이 안 된다 — 실사용에서 이게 문제였다.
+    """
     shot = render(lines, width=width, height=height, **kwargs)
     grey = bytearray(shot.grey)
-    for y in range(height):
+    for y in range(int(height * covers)):
         for x in list(range(thickness)) + list(range(width - thickness, width)):
             grey[y * width + x] = 90
     return sc.Shot(width, height, bytes(grey))
@@ -175,6 +179,37 @@ class VerticalRules(unittest.TestCase):
         self.assertTrue(found)
         self.assertLessEqual(max(found), 899)
         self.assertIn(0, found)
+
+    def test_borders_shorter_than_the_pick_are_still_found(self):
+        """고른 자리가 테두리보다 넓어도 찾아야 한다.
+
+        처음에는 "그림 높이의 80% 넘게 어두운 칸" 으로 쟀다. 그랬더니
+        테두리가 고른 자리의 72~79% 만 차지할 때 그냥 지나가 버렸고,
+        글줄이 통째로 뭉쳐 상자가 문서만 해졌다. 실사용에서 그렇게 나왔다.
+        이제는 '끊기지 않고 이어진 길이' 로 재므로 비율과 무관하다.
+        """
+        for covers in (1.0, 0.79, 0.72, 0.5, 0.25):
+            with self.subTest(covers=covers):
+                shot = with_rules(BEFORE, height=500, covers=covers)
+                self.assertTrue(shot.rules, "테두리를 못 찾았습니다")
+                self.assertEqual(len(sc.bands(shot)), len(BEFORE),
+                                 "글줄이 뭉쳤습니다")
+
+    def test_marks_stay_about_one_line_tall(self):
+        """상자는 고쳐진 글자에 붙어야지 문서를 감싸면 안 된다.
+
+        보기 싫다는 말씀이 있었고, 실제로는 글줄 뭉침의 증상이었다.
+        """
+        after = list(BEFORE)
+        after[4] = ("1. 관련: 예시중학교-2949(2026. 5. 14., "
+                    "“2026 학교교육계획”)호")
+        for covers in (1.0, 0.72):
+            with self.subTest(covers=covers):
+                a = with_rules(BEFORE, height=500, covers=covers)
+                b = with_rules(after, height=500, covers=covers)
+                for mark in changed(sc.compare(a, b)):
+                    self.assertLess(mark.bottom - mark.top, 40,
+                                    "글줄 하나보다 훨씬 큽니다")
 
     def test_lines_are_still_counted_right(self):
         self.assertEqual(len(sc.bands(with_rules(BEFORE))), len(BEFORE))

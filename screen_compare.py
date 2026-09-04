@@ -47,13 +47,9 @@ PAIRABLE = 0.55
 # 이만큼 붙어 있는 표시 구간은 하나로 묶는다. 상자가 잘게 흩어지면 읽기 어렵다.
 JOIN = 8
 
-# 세로로 이 비율 넘게 이어지는 칸은 글자가 아니라 선으로 본다.
-#
-# 글자의 세로획이 여기 걸릴까 걱정해 "낮은 그림에서는 찾지 않는다" 는
-# 방어를 뒀다가 뺐다. 16px 까지 바짝 잘라 재 봐도 세로획은 그림 높이의
-# 80% 에 닿지 못한다 — 글자 사이에 빈 줄이 있기 때문이다. 막지 못하는
-# 방어를 남겨 두면 뜻이 있는 것처럼 보여서 더 나쁘다.
-RULE = 0.8
+# 끊기지 않고 이 길이(픽셀) 넘게 이어지는 칸은 글자가 아니라 선으로 본다.
+# 그림이 크면 글자도 크므로 높이에 따라 함께 키운다.
+RUN_MIN = 40
 
 SAME, EDITED, ADDED, REMOVED = "same", "edited", "added", "removed"
 
@@ -174,22 +170,36 @@ def capture(left: int, top: int, width: int, height: int) -> Shot:
 # ------------------------------------------------------------------ 비교
 
 def _find_rules(shot: Shot) -> frozenset[int]:
-    """세로줄로 이어지는 칸을 찾는다. `Shot.rules` 가 부른다."""
-    # 몇 줄 건너뛰며 세도 충분하다. 선은 끝까지 이어지므로 표본으로 드러난다.
-    stride = max(1, shot.height // 150)
-    rows = range(0, shot.height, stride)
-    counts = [0] * shot.width
-    for y in rows:
+    """세로로 길게 이어지는 칸을 찾는다. `Shot.rules` 가 부른다.
+
+    **'그림 높이의 몇 % 인가' 로 재면 안 된다.** 고른 자리가 테두리보다
+    넓으면 테두리가 그 비율에 못 미쳐 그냥 지나가고, 그 순간 글줄이 통째로
+    하나로 뭉친다. 실사용에서 정확히 이렇게 됐다 — 테두리가 고른 자리의
+    72~79% 를 차지해 8할 기준을 아슬아슬하게 비껴갔다.
+
+    대신 **끊기지 않고 이어진 길이** 로 본다. 테두리·표 눈금은 글줄
+    높이의 몇 배씩 이어지지만 글자의 세로획은 글줄 하나를 넘지 못한다.
+    고른 자리가 테두리를 얼마나 넉넉히 감쌌든 상관이 없어진다.
+    """
+    limit = max(RUN_MIN, shot.height // 8)
+    run = [0] * shot.width          # 지금 이어지고 있는 길이
+    longest = [0] * shot.width      # 그 칸에서 가장 길게 이어진 길이
+    inked = [False] * shot.width
+    for y in range(shot.height):
         row = shot.grey[y * shot.width:(y + 1) * shot.width]
         for x, value in enumerate(row):
             if value < INK:
-                counts[x] += 1
+                inked[x] = True
+                run[x] += 1
+                if run[x] > longest[x]:
+                    longest[x] = run[x]
+            else:
+                run[x] = 0
 
-    limit = len(list(rows)) * RULE
-    found = frozenset(x for x, n in enumerate(counts) if n >= limit)
+    found = frozenset(x for x, length in enumerate(longest) if length >= limit)
 
     # 걸러 낸 뒤 글자가 하나도 안 남으면 잘못 짚은 것이다. 그대로 둔다.
-    if found and all(x in found for x, n in enumerate(counts) if n):
+    if found and all(x in found for x, on in enumerate(inked) if on):
         return frozenset()
     return found
 
