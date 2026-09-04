@@ -28,8 +28,8 @@ from tkinter import font as tkfont
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app import (DB_PATH, PORT, VERSION, Handler, ask_to_surface, fold_groups,  # noqa: E402
-                 load_config, open_in_os, resolve_folder, resolve_inbox,
-                 running_port, save_config, start_server)
+                 load_config, open_in_os, raise_running_widget, resolve_folder,
+                 resolve_inbox, running_port, save_config, start_server)
 from classify import CATEGORIES, days_left  # noqa: E402
 from store import Store  # noqa: E402
 import changelog  # noqa: E402
@@ -759,6 +759,30 @@ def onto_screen(where: tuple[int, int], bounds: tuple[int, int, int, int],
     return int(x), int(y)
 
 
+def _say_it_is_already_running() -> None:
+    """되살리지 못했을 때만 띄우는 마지막 안내.
+
+    **반드시 맨 위에 띄운다.** 그냥 띄우면 이 창마저 다른 창 뒤에 숨어서,
+    쓰는 분에게는 여전히 "아무 반응이 없다" 로 보인다. 되살리기가 안 되던
+    때 실제로 그랬다.
+    """
+    from tkinter import messagebox
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        messagebox.showinfo(
+            "공문 정리함",
+            "이미 실행 중이라 앞으로 불러내려 했지만 창을 찾지 못했습니다.\n\n"
+            "작업 관리자(Ctrl+Shift+Esc)에서 '공문 정리함' 을 끝낸 뒤\n"
+            "다시 실행해 주세요.\n\n"
+            "지우고 다시 설치하실 필요는 없습니다. 설정과 그동안의 기록도\n"
+            "그대로 남습니다.",
+            parent=root)
+    finally:
+        root.destroy()
+
+
 def clamp_opacity(value) -> float:
     """투명도를 쓸 수 있는 범위로 가둔다.
 
@@ -915,18 +939,18 @@ def main():
     running = running_port(args.port) if not args.folder else None
     if running is not None:
         # 이미 떠 있으면 그쪽을 앞으로 불러내고 조용히 물러난다. 위젯은
-        # 테두리 없는 창이라 작업 표시줄에 안 뜨는데, 바탕화면 보기로
-        # 가려지면 되살릴 길이 없었다 — 다시 실행해도 "이미 실행 중"
-        # 이라는 말만 들었다. 이제 그 다시 실행이 곧 되살리기다.
-        if ask_to_surface(running):
+        # 테두리 없는 창이라 작업 표시줄에 안 뜨는데, 가려지면 되살릴 길이
+        # 없었다 — 다시 실행해도 "이미 실행 중" 이라는 말만 들었다.
+        #
+        # **두 길을 모두 쓴다.** 부탁하는 길(`/api/show`)은 상대가 그 길을
+        # 아는 판일 때만 듣는다. 옛 버전이 돌고 있으면 404 가 나고, 다시
+        # 설치해도 파일만 바뀔 뿐 **이미 돌던 옛 프로세스는 그대로**라
+        # 영영 낫지 않는다. 창을 직접 세우는 길은 상대가 어느 판이든 듣는다.
+        asked = ask_to_surface(running)
+        raised = raise_running_widget()
+        if asked or raised:
             return
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showinfo("공문 정리함",
-                            "이미 실행 중입니다.\n\n화면 구석에 작은 창이 떠 있는지 살펴보세요.\n"
-                            "보이지 않으면 다른 창 뒤에 가려져 있을 수 있습니다.")
-        root.destroy()
+        _say_it_is_already_running()
         return
 
     chosen = resolve_folder(args.folder, ask=is_first_run)

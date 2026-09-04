@@ -122,16 +122,48 @@ class BringingItBack(unittest.TestCase):
         _, y = widget.onto_screen((300, 9000), self.BOUNDS)
         self.assertLessEqual(y + 40, 1080, "잡을 자리가 없습니다")
 
-    def test_running_again_asks_the_first_one_to_show_itself(self):
-        """다시 실행하는 것이 곧 되살리기여야 한다."""
+    def test_running_again_tries_both_ways_to_bring_it_back(self):
+        """다시 실행하는 것이 곧 되살리기여야 한다. **길이 둘이어야 한다.**
+
+        `/api/show` 로 부탁하는 길은 상대가 그 길을 아는 판일 때만 듣는다.
+        옛 버전이 돌고 있으면 404 가 나고, 다시 설치해도 파일만 바뀔 뿐
+        이미 돌던 옛 프로세스는 그대로라 영영 낫지 않는다. 실제로 몇 분이
+        지웠다 설치하기를 되풀이하셨다.
+
+        창을 밖에서 직접 세우는 길은 상대가 어느 판이든 듣는다.
+        """
         source = (ROOT / "widget.py").read_text(encoding="utf-8")
         start = source.index("running = running_port(")
-        block = source[start:start + 700]
-        self.assertIn("ask_to_surface(running)", block)
-        # 부탁이 닿지 않았을 때만 예전 안내창으로 물러난다
-        self.assertLess(block.index("ask_to_surface(running)"),
-                        block.index("이미 실행 중입니다"),
-                        "불러내 보지도 않고 안내창부터 띄웁니다")
+        block = source[start:start + 900]
+        self.assertIn("ask_to_surface(running)", block, "부탁하는 길이 없습니다")
+        self.assertIn("raise_running_widget()", block, "직접 세우는 길이 없습니다")
+        # 둘 다 실패했을 때만 안내창으로 물러난다
+        self.assertLess(block.index("raise_running_widget()"),
+                        block.index("_say_it_is_already_running"),
+                        "되살려 보지도 않고 안내창부터 띄웁니다")
+
+    def test_the_last_resort_notice_cannot_hide_behind_things(self):
+        """되살리지 못했을 때의 안내창마저 숨으면 '아무 반응 없음' 이 된다."""
+        source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        block = source[source.index("def _say_it_is_already_running"):]
+        block = block[:block.index("\ndef ", 10)]
+        self.assertIn('"-topmost", True', block, "안내창이 뒤로 숨을 수 있습니다")
+        # 지웠다 다시 설치하기를 되풀이하시던 분들께 그럴 필요가 없다고
+        # 알려 주는 것이 이 문구의 핵심이다.
+        self.assertIn("지우고 다시 설치하실 필요는 없습니다", block)
+        self.assertIn("작업 관리자", block)
+
+    def test_raising_from_outside_needs_no_help_from_the_running_copy(self):
+        """밖에서 세우는 길은 떠 있는 판의 협조에 기대면 안 된다."""
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+        block = source[source.index("def raise_running_widget"):]
+        block = block[:block.index("\n# SetWindowPos")]
+        for needed in ("EnumWindows", "GetWindowTextW", "SetWindowPos",
+                       "AttachThreadInput", "GetCurrentProcessId"):
+            with self.subTest(needed=needed):
+                self.assertIn(needed, block)
+        # 우리 자신을 세우려 들면 안 된다
+        self.assertIn("owner.value == ours", block)
 
     def test_the_signal_is_watched_on_the_main_thread(self):
         """tkinter 는 요청 스레드에서 만지면 안 된다.

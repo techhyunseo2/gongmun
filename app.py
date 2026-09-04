@@ -41,7 +41,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.6.6"
+VERSION = "1.6.7"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -162,6 +162,76 @@ def _allow_foreground_steal() -> None:
         ctypes.windll.user32.AllowSetForegroundWindow(-1)   # ASFW_ANY
     except Exception:  # noqa: BLE001
         pass
+
+
+WIDGET_TITLE = "공문 정리함"
+
+
+def raise_running_widget(title: str = WIDGET_TITLE) -> bool:
+    """이미 떠 있는 위젯 창을 밖에서 찾아 앞으로 세운다. 세웠으면 True.
+
+    **떠 있는 판의 협조에 기대지 않는다.** `/api/show` 로 부탁하는 길은 그
+    판이 그 길을 아는 판일 때만 듣는다. 옛 버전이 돌고 있으면 404 가 나고,
+    그러면 안내창으로 물러나는데 **그 안내창마저 다른 창 뒤에 숨는다.**
+    쓰는 분에게는 "아무 반응이 없다" 로 보인다.
+
+    다시 설치해도 낫지 않는다 — 파일만 새것으로 바뀌고 **이미 돌던 옛
+    프로세스는 그대로 살아 있기** 때문이다. 실제로 몇 분이 지웠다 설치하기를
+    되풀이하셨다.
+
+    여기는 창을 직접 세우므로 상대가 어느 판이든 듣는다. 실패해도 해가
+    없다 — 부르는 쪽이 뒤이어 안내창을 띄운다.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        from ctypes import wintypes
+        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+        ours = kernel32.GetCurrentProcessId()
+        found: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def visit(hwnd, _param):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == ours:        # 방금 뜬 우리 자신은 건너뛴다
+                return True
+            name = ctypes.create_unicode_buffer(160)
+            user32.GetWindowTextW(hwnd, name, 160)
+            if name.value == title:
+                found.append(hwnd)
+            return True
+
+        user32.EnumWindows(visit, 0)
+        if not found:
+            return False
+
+        mine = kernel32.GetCurrentThreadId()
+        front = user32.GetForegroundWindow()
+        theirs = user32.GetWindowThreadProcessId(front, None)
+        joined = bool(theirs and theirs != mine
+                      and user32.AttachThreadInput(theirs, mine, True))
+        try:
+            for hwnd in found:
+                user32.ShowWindow(hwnd, 9)                      # SW_RESTORE
+                # 맨 위 칸으로 올렸다가 곧바로 내린다. 올리기만 하면 '항상
+                # 위' 를 꺼 두신 분의 설정을 어기게 된다.
+                user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, _KEEP)   # TOPMOST
+                user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, _KEEP)   # NOTOPMOST
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+        finally:
+            if joined:
+                user32.AttachThreadInput(theirs, mine, False)
+        return True
+    except Exception:  # noqa: BLE001 — 못 세워도 진행은 된다
+        return False
+
+
+# SetWindowPos: 크기·자리를 건드리지 말고 초점도 뺏지 말 것
+_KEEP = 0x0001 | 0x0002 | 0x0010
 
 
 def _raise_explorer_window(folder_name: str) -> None:

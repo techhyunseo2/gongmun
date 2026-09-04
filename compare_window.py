@@ -92,7 +92,15 @@ def _grab_focus(window: tk.Misc) -> None:
     """
     try:
         user32 = ctypes.windll.user32
+        # `winfo_id()` 는 **진짜 최상위 창이 아닐 수 있다.** 테두리 없는
+        # 창에서 실측해 보니 자식 창 손잡이가 나왔다(13241590 ≠ 7802858).
+        # 그 손잡이에 초점을 걸면 아무 일도 일어나지 않는다.
         handle = window.winfo_id()
+        while True:
+            parent = user32.GetAncestor(handle, 2)      # GA_ROOT
+            if not parent or parent == handle:
+                break
+            handle = parent
         mine = ctypes.windll.kernel32.GetCurrentThreadId()
         front = user32.GetForegroundWindow()
         theirs = user32.GetWindowThreadProcessId(front, None)
