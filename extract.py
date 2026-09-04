@@ -54,7 +54,10 @@ def extract_rich(path: str | Path) -> tuple[str, str]:
     elif suffix in (".xlsx", ".xlsm", ".xls"):
         html, text = _from_excel(path)
     elif suffix in (".txt", ".md"):
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        # utf-8-sig 로 읽어야 메모장이 앞에 붙이는 보이지 않는 표식(BOM)이
+        # 벗겨진다. 그냥 utf-8 로 읽으면 그 글자가 제목 앞에 딸려 들어가
+        # 목록에 이상한 글자로 보인다. 실제 exe 로 확인한 것이다.
+        text = path.read_text(encoding="utf-8-sig", errors="ignore")
     else:
         raise ExtractError(f"지원하지 않는 형식입니다: {suffix}")
     return _tidy(text), html
