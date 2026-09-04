@@ -63,7 +63,7 @@ jobs:
       - name: 회귀 테스트
         run: |
           python -m unittest discover -s tests -v
-          if ($LASTEXITCODE -ne 0) { throw "회귀 테스트 실패 — 날짜/기한 추출이 깨졌습니다" }
+          if ($LASTEXITCODE -ne 0) { throw "회귀 테스트 실패 — 위 -v 출력에서 FAIL/ERROR 줄을 보세요" }
 
       - name: 실행 파일 만들기
         run: pyinstaller --clean --noconfirm --log-level INFO build.spec

@@ -23,7 +23,8 @@ a = Analysis(
            ("LICENSE", "."), ("THIRD-PARTY-NOTICES.txt", ".")],
     hiddenimports=["olefile", "pypdf", "openpyxl", "xlrd", "app", "store",
                    "classify", "extract", "hwpx_view", "updater", "organize",
-                   "changelog", "compare"],
+                   "changelog", "compare", "screen_compare",
+                   "compare_window"],
     hookspath=[],
     runtime_hooks=[],
     # 쓰지 않는 큰 덩어리를 빼서 파일 크기를 줄인다

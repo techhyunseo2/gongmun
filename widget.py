@@ -365,6 +365,19 @@ class Widget:
             self.btn_fold.config(text="—")
             self._fit_height()
 
+    def compare_screens(self):
+        """결재 전후 비교. 한글 창 두 개를 띄워 둔 채 자리만 끌면 된다.
+
+        메뉴가 닫힌 뒤에 시작해야 한다. 바로 시작하면 화면을 덮는 막이
+        아직 떠 있는 메뉴를 같이 덮어 버린다.
+        """
+        def start():
+            from tkinter import messagebox
+            import compare_window
+            compare_window.run(self.root, messagebox.showinfo)
+
+        self.root.after(120, start)
+
     def _menu(self, event):
         menu = tk.Menu(self.root, tearoff=0)
         on_top = bool(self.config.get("on_top", True))
@@ -376,6 +389,8 @@ class Widget:
         menu.add_command(label="공문 폴더 열기", command=lambda: open_in_os(self.folder))
         menu.add_command(label="공문 폴더 바꾸기", command=self._change_folder)
         menu.add_command(label="전체 화면 열기", command=self.open_browser)
+        menu.add_separator()
+        menu.add_command(label="결재 전후 비교", command=self.compare_screens)
         menu.add_separator()
         menu.add_command(label="컴퓨터 켤 때 자동 실행 " + ("끄기" if startup_enabled() else "켜기"),
                          command=self._toggle_startup)
