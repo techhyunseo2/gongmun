@@ -189,5 +189,51 @@ class Routes(unittest.TestCase):
         self.assertEqual(state["rev"], rev["rev"])
 
 
+class SurfaceCall(unittest.TestCase):
+    """프로그램을 또 실행하면 떠 있는 위젯이 앞으로 나와야 한다.
+
+    위젯은 테두리 없는 창이라 작업 표시줄에 뜨지 않는다. 바탕화면 보기로
+    가려지면 되살릴 길이 없었다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.inbox = cls.tmp / "공문"
+        cls.inbox.mkdir(parents=True)
+        cls.store = Store(cls.tmp / "t.db")
+        cls.server, cls.port = app.start_server(cls.store, cls.inbox,
+                                                port=9941, base=cls.tmp)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.store.conn.close()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_the_running_one_is_found_on_its_port(self):
+        self.assertEqual(app.running_port(self.port), self.port)
+
+    def test_nothing_running_is_nothing_found(self):
+        self.assertIsNone(app.running_port(9800))
+
+    def test_asking_raises_the_count(self):
+        before = app.Handler.show_calls
+        self.assertTrue(app.ask_to_surface(self.port))
+        self.assertEqual(app.Handler.show_calls, before + 1,
+                         "위젯이 지켜보는 숫자가 오르지 않았습니다")
+
+    def test_asking_a_dead_port_just_says_no(self):
+        """부탁이 안 닿으면 예전 안내창으로 물러나야 한다. 터지면 안 된다."""
+        self.assertFalse(app.ask_to_surface(9801))
+
+    def test_it_never_scans_the_disk(self):
+        """되살리기는 사람이 기다리는 일이다. 폴더를 훑고 있으면 안 된다."""
+        before = self.store.rev
+        app.ask_to_surface(self.port)
+        self.assertEqual(self.store.rev, before,
+                         "읽기가 변경 번호를 올렸습니다")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

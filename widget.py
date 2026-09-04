@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import random
 import subprocess
 import sys
@@ -26,9 +27,9 @@ from tkinter import font as tkfont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app import (DB_PATH, PORT, VERSION, Handler, already_running, fold_groups,  # noqa: E402
-                 load_config, open_in_os, resolve_folder, resolve_inbox, save_config,
-                 start_server)
+from app import (DB_PATH, PORT, VERSION, Handler, ask_to_surface, fold_groups,  # noqa: E402
+                 load_config, open_in_os, resolve_folder, resolve_inbox,
+                 running_port, save_config, start_server)
 from classify import CATEGORIES, days_left  # noqa: E402
 from store import Store  # noqa: E402
 import changelog  # noqa: E402
@@ -80,7 +81,9 @@ class Widget:
 
         self.refresh(scan=True)
         self._tick()
+        self._seen_calls = Handler.show_calls
         self._live_tick()
+        self._watch_for_calls()
         # 같은 학교 여러 대가 한꺼번에 몰리지 않도록 조금 흩어 놓는다
         self.root.after(random.randint(5, 90) * 1000, self._maybe_check_update)
 
@@ -658,6 +661,54 @@ class Widget:
         finally:
             self.root.after(int(LIVE_SECONDS * 1000), self._live_tick)
 
+    def _watch_for_calls(self):
+        """"앞으로 나와 달라" 는 부탁이 왔는지 본다.
+
+        `_live_tick`(2.5초) 에 얹지 않고 따로 둔다. 되살리기는 사람이
+        아이콘을 누르고 기다리는 일이라 2.5초는 길다. 여기서 하는 일은
+        정수 하나 비교가 전부라 자주 돌아도 부담이 없다 — 디스크도
+        저장소도 건드리지 않는다.
+        """
+        try:
+            if Handler.show_calls != self._seen_calls:
+                self._seen_calls = Handler.show_calls
+                self.surface()
+        finally:
+            self.root.after(250, self._watch_for_calls)
+
+    def surface(self):
+        """가려졌거나 화면 밖으로 나간 위젯을 다시 눈앞으로 데려온다.
+
+        테두리 없는 창이라 작업 표시줄에 뜨지 않는다. 바탕화면 보기로
+        가려지면 되살릴 길이 없었다.
+        """
+        self.root.deiconify()
+        self.root.overrideredirect(True)
+        self._pull_onto_screen()
+        self.root.attributes("-alpha",
+                             clamp_opacity(self.config.get("opacity", 0.96)))
+        self.root.lift()
+        # 잠깐 맨 위로 올려야 확실히 보인다. '항상 위' 를 꺼 두신 분에게는
+        # 그 설정을 다시 존중해 돌려놓는다.
+        self.root.attributes("-topmost", True)
+        if not bool(self.config.get("on_top", True)):
+            self.root.after(1500,
+                            lambda: self.root.attributes("-topmost", False))
+
+    def _pull_onto_screen(self):
+        """창이 화면 밖에 있으면 안으로 끌어온다.
+
+        모니터를 빼거나 해상도를 바꾸면 저장해 둔 자리가 화면 밖이 된다.
+        그러면 떠 있어도 영영 안 보인다.
+        """
+        metric = ctypes.windll.user32.GetSystemMetrics
+        # 76~79 = 모든 모니터를 합친 범위 (왼쪽, 위, 너비, 높이)
+        bounds = (metric(76), metric(77), metric(78), metric(79))
+        here = (self.root.winfo_x(), self.root.winfo_y())
+        there = onto_screen(here, bounds)
+        if there != here:
+            self.root.geometry(f"+{there[0]}+{there[1]}")
+
     def _sync_folder(self):
         """브라우저에서 폴더를 바꿨으면 위젯도 그쪽을 보게 한다."""
         folder = getattr(Handler, "folder", None)
@@ -687,6 +738,25 @@ class Widget:
 
     def run(self):
         self.root.mainloop()
+
+
+def onto_screen(where: tuple[int, int], bounds: tuple[int, int, int, int],
+                margin: int = 80) -> tuple[int, int]:
+    """창 자리를 화면 안으로 끌어온다. (왼쪽, 위) 를 돌려준다.
+
+    모니터를 빼거나 해상도를 바꾸면 저장해 둔 자리가 화면 밖이 된다.
+    위젯은 테두리 없는 창이라 작업 표시줄에도 안 뜨므로, 그렇게 되면
+    떠 있어도 영영 못 찾는다.
+
+    `bounds` 는 모든 모니터를 합친 (왼쪽, 위, 너비, 높이). `margin` 은
+    아래쪽에 남길 여유 — 창 전체가 아니라 머리말만이라도 잡을 수 있으면
+    끌어다 옮길 수 있다.
+    """
+    x, y = where
+    left, top, width, height = bounds
+    x = min(max(x, left), left + width - WIDTH)
+    y = min(max(y, top), top + height - margin)
+    return int(x), int(y)
 
 
 def clamp_opacity(value) -> float:
@@ -842,7 +912,14 @@ def main():
     updated_to = config.get("updated_to")
     just_updated = bool(updated_to) and updated_to == VERSION
 
-    if already_running(args.port) and not args.folder:
+    running = running_port(args.port) if not args.folder else None
+    if running is not None:
+        # 이미 떠 있으면 그쪽을 앞으로 불러내고 조용히 물러난다. 위젯은
+        # 테두리 없는 창이라 작업 표시줄에 안 뜨는데, 바탕화면 보기로
+        # 가려지면 되살릴 길이 없었다 — 다시 실행해도 "이미 실행 중"
+        # 이라는 말만 들었다. 이제 그 다시 실행이 곧 되살리기다.
+        if ask_to_surface(running):
+            return
         from tkinter import messagebox
         root = tk.Tk()
         root.withdraw()

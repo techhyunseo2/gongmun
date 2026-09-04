@@ -307,6 +307,11 @@ class Handler(BaseHTTPRequestHandler):
     folder: Path          # 공문 인박스 — 여기만 읽는다
     base: Path            # 업무 루트 — 월별 폴더를 만드는 곳
 
+    # 위젯을 다시 앞으로 불러 달라는 요청이 올 때마다 오른다. 위젯이
+    # 메인 스레드에서 이 값만 지켜본다 — tkinter 를 요청 스레드에서
+    # 만지면 안 되기 때문이다.
+    show_calls: int = 0
+
     def log_message(self, *args):  # 콘솔을 조용하게
         pass
 
@@ -364,6 +369,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/state":
             return self._json(self._state())
+
+        if route == "/api/show":
+            # 프로그램을 또 실행했을 때 두 번째 판이 여기를 두드린다.
+            # 위젯이 다른 창 뒤에 숨어 되살릴 길이 없던 것을 푸는 자리다.
+            Handler.show_calls += 1
+            return self._json({"ok": True})
 
         if route == "/api/rev":
             # 화면이 몇 초마다 물어보는 자리. 내용이 바뀌었는지만 알려 준다.
@@ -626,8 +637,8 @@ def _sort_key(doc: dict):
 
 # ------------------------------------------------------------------ main
 
-def already_running(port: int) -> bool:
-    """같은 프로그램이 이미 떠 있는지 본다.
+def running_port(port: int) -> int | None:
+    """같은 프로그램이 이미 떠 있으면 그쪽이 쓰는 포트를 알려 준다.
 
     포트가 열려 있다는 것만으로는 부족하다. 다른 프로그램이 그 번호를
     쓰고 있을 수 있으므로, 우리 응답이 오는지까지 확인한다.
@@ -636,15 +647,37 @@ def already_running(port: int) -> bool:
     import urllib.error
     import urllib.request
     for offset in range(PORT_TRIES):
+        found = port + offset
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port + offset}/api/state",
+            with urllib.request.urlopen(f"http://127.0.0.1:{found}/api/state",
                                         timeout=0.5) as response:
                 data = _json.loads(response.read().decode("utf-8"))
                 if "categories" in data and "docs" in data:
-                    return True
+                    return found
         except (urllib.error.URLError, OSError, ValueError, TimeoutError):
             continue
-    return False
+    return None
+
+
+def already_running(port: int) -> bool:
+    return running_port(port) is not None
+
+
+def ask_to_surface(port: int) -> bool:
+    """떠 있는 판에게 "앞으로 나와 달라" 고 부탁한다. 됐으면 True.
+
+    위젯은 테두리 없는 창이라 작업 표시줄에 뜨지 않는다. 바탕화면 보기로
+    가려지면 되살릴 방법이 없었다 — 다시 실행해 봐야 "이미 실행 중" 이라는
+    말만 들었다. 이제 그 다시 실행이 곧 되살리기다.
+    """
+    import urllib.error
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/show",
+                                    timeout=1.0) as response:
+            return response.status == 200
+    except (urllib.error.URLError, OSError, TimeoutError):
+        return False
 
 
 def start_server(store: Store, folder: Path, port: int = PORT,
