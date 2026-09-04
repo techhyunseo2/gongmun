@@ -120,6 +120,46 @@ class Finding(unittest.TestCase):
         marked = sum(end - start for start, end in rows[0].spans)
         self.assertLess(marked, 200, "너무 넓게 표시했습니다")
 
+    def test_one_box_per_changed_line(self):
+        """상자는 줄마다 하나. 처음 달라진 데서 마지막까지 감싼다.
+
+        글자가 끼어들면 그 뒤가 옆으로 밀리고, 밀린 자리의 글자는 같은
+        글자라도 픽셀이 미묘하게 달라진다. 잘게 나누면 멀쩡한 글자에도
+        상자가 붙어 무더기가 된다 — 따옴표 둘과 '호' 를 넣었을 뿐인데
+        상자가 넷 떴다.
+        """
+        after = list(BEFORE)
+        after[4] = ("1. 관련: 예시중학교-2949(2026. 5. 14., "
+                    "“2026 학교교육계획”)호")
+        for mark in changed(sc.compare(render(BEFORE), render(after))):
+            with self.subTest(mark=mark):
+                self.assertEqual(len(mark.spans), 1, "상자가 흩어졌습니다")
+
+    def test_tightened_spacing_gives_one_box_too(self):
+        """자간을 줄이면 줄 전체가 조금씩 밀린다.
+
+        눈으로 찾기 가장 어려운 종류인데, 정작 그때 상자 무더기가 쏟아지면
+        도구가 도움이 안 된다.
+        """
+        after = list(BEFORE)
+        after[5] = BEFORE[5].replace(" ", "")
+        marks = changed(sc.compare(render(BEFORE), render(after)))
+        self.assertTrue(marks)
+        for mark in marks:
+            with self.subTest(mark=mark):
+                self.assertEqual(len(mark.spans), 1, "상자가 흩어졌습니다")
+
+    def test_two_far_apart_edits_share_one_box(self):
+        """한 줄에 떨어진 수정이 둘이어도 하나로 묶는다. 그 줄은 통째로 볼 줄이다."""
+        after = list(BEFORE)
+        after[10] = "   바. 소요예산: 금80,000원(금팔만원).  끝."
+        marks = changed(sc.compare(render(BEFORE), render(after)))
+        self.assertEqual(len(marks), 1)
+        self.assertEqual(len(marks[0].spans), 1)
+        start, end = marks[0].spans[0]
+        self.assertLess(start, 80, "앞쪽 항목 번호부터 감싸야 합니다")
+        self.assertGreater(end, 180, "뒤쪽 금액까지 감싸야 합니다")
+
     def test_inserted_line_does_not_flag_the_rest(self):
         """줄이 끼어들면 아래가 전부 밀린다. 그걸 다 바뀐 것으로 보면 안 된다."""
         after = BEFORE[:8] + ["   다. 준비물: 앞치마"] + BEFORE[8:]

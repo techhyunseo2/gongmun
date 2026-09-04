@@ -44,9 +44,6 @@ BUCKET = 3
 # 두 글줄이 이만큼도 안 닮았으면 같은 줄이 고쳐진 것으로 보지 않는다.
 PAIRABLE = 0.55
 
-# 이만큼 붙어 있는 표시 구간은 하나로 묶는다. 상자가 잘게 흩어지면 읽기 어렵다.
-JOIN = 8
-
 # 끊기지 않고 이 길이(픽셀) 넘게 이어지는 칸은 글자가 아니라 선으로 본다.
 # 그림이 크면 글자도 크므로 높이에 따라 함께 키운다.
 RUN_MIN = 40
@@ -246,19 +243,34 @@ def _ratio(one, other) -> float:
 
 
 def _spans(before: list[int], after: list[int]) -> list[tuple[int, int]]:
-    """같은 글줄 안에서 달라진 칸 구간. 수정본 기준."""
-    rough = []
-    for tag, _, _, start, end in difflib.SequenceMatcher(
-            None, before, after, autojunk=False).get_opcodes():
-        if tag != "equal":
-            rough.append((start, max(end, start + 2)))
-    joined: list[list[int]] = []
-    for start, end in rough:
-        if joined and start - joined[-1][1] <= JOIN:
-            joined[-1][1] = end
-        else:
-            joined.append([start, end])
-    return [(a, b) for a, b in joined]
+    """같은 글줄 안에서 달라진 자리. **처음부터 끝까지 하나로 묶는다.**
+
+    잘게 나누면 안 되는 이유가 있다. 글자 하나가 끼어들면 그 뒤가 통째로
+    옆으로 밀리는데, 밀린 자리의 글자는 **같은 글자라도 픽셀이 미묘하게
+    달라진다**(글꼴이 자리에 맞춰 획을 다듬기 때문). 그래서 진짜로 바뀐
+    곳 말고 중간중간 멀쩡한 글자까지 함께 잡힌다. 실제로 따옴표 두 개와
+    '호' 가 붙었을 뿐인데 상자가 네 개 떴다.
+
+    자간을 줄이는 식의 수정은 줄 전체가 조금씩 밀리므로 더 심하다. 그런
+    수정이 눈으로 찾기 가장 어려운 종류인데, 정작 그때 상자 무더기가
+    쏟아지면 도구가 도움이 안 된다.
+
+    그래서 **처음 달라진 자리부터 마지막으로 달라진 자리까지** 를 하나로
+    감싼다. "이 안 어딘가가 바뀌었다" 는 정확한 말이고, 흩어진 상자를
+    좇는 것보다 눈이 편하다. 한 줄에 멀리 떨어진 수정이 둘 있으면 그
+    사이까지 함께 묶이지만, 어차피 그 줄은 통째로 봐야 하는 줄이다.
+    """
+    marks = [(start, max(end, start + 2))
+             for tag, _, _, start, end in difflib.SequenceMatcher(
+                 None, before, after, autojunk=False).get_opcodes()
+             if tag != "equal"]
+    if not marks:
+        return []
+    left = marks[0][0]
+    right = min(marks[-1][1], len(after))
+    if right <= left:
+        right = min(left + 2, len(after))
+    return [(left, right)]
 
 
 def compare(before: Shot, after: Shot) -> list[Change]:
