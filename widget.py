@@ -8,7 +8,8 @@
   python widget.py --folder "경로"   폴더를 지정한다
 
 머리말을 끌면 창이 움직이고, 위치는 다음 실행 때 그대로 복원된다.
-오른쪽 버튼을 누르면 항상 위, 투명도, 자동 새로고침을 바꿀 수 있다.
+머리말 아이콘으로 항상 위·결재 전후 비교·빠른 붙여넣기를 켜고, 바로
+아래 슬라이더로 투명도를 맞춘다. 오른쪽 버튼에는 업데이트 확인만 남는다.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from __future__ import annotations
 import argparse
 import ctypes
 import random
-import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -43,6 +43,8 @@ SOFT = "#5C685F"
 RULE = "#C3CAC3"
 SEAL = "#A6301F"
 SLATE = "#3A5560"
+MOSS = "#3C5A46"          # 결재 전후 비교 아이콘의 '원본' 쪽
+GLOW = "#FFFFFF"          # 마우스를 올렸을 때 살짝 더 밝아지는 바탕
 
 CAT_COLOR = {
     "submit": "#A6301F", "event": "#3A5560", "apply": "#8A6A1F",
@@ -83,6 +85,7 @@ class Widget:
         self._place()
         self._bind()
         self._render_quick()
+        self._draw_opacity_slider()
         self._claim_taskbar_button()
 
         self.refresh(scan=True)
@@ -113,29 +116,60 @@ class Widget:
         outer = tk.Frame(self.root, bg=PAPER)
         outer.pack(fill="both", expand=True, padx=1, pady=1)
 
-        # 머리말 — 여기를 끌면 창이 움직인다
+        # 머리말 — 빈 자리를 끌면 창이 움직인다. 아이콘은 저마다 동작이 있다.
         self.head = tk.Frame(outer, bg=PAPER)
         self.head.pack(fill="x", padx=12, pady=(9, 2))
         tk.Label(self.head, text="공문 정리함", font=self.f_title, bg=PAPER, fg=INK).pack(side="left")
-        self.btn_close = tk.Label(self.head, text="✕", font=self.f_head, bg=PAPER, fg=SOFT, cursor="hand2")
-        self.btn_close.pack(side="right", padx=(6, 0))
-        self.btn_fold = tk.Label(self.head, text="—", font=self.f_head, bg=PAPER, fg=SOFT, cursor="hand2")
-        self.btn_fold.pack(side="right")
-        self.btn_quick = tk.Label(self.head, text="▤", font=self.f_head, bg=PAPER, fg=SOFT, cursor="hand2")
-        self.btn_quick.pack(side="right", padx=(0, 6))
 
-        self.summary = tk.Label(outer, text="읽는 중", font=self.f_head, bg=PAPER, fg=SOFT, anchor="w")
+        self._tip = None
+        self._tip_after = None
+        self._no_drag = set()
+
+        self.btn_close = self._text_button("✕", "닫기", self.quit)
+        self.btn_close.pack(side="right", padx=(6, 0))
+        self.btn_fold = self._text_button("—", "접기", self.toggle_fold)
+        self.btn_fold.pack(side="right", padx=(2, 0))
+        self.btn_quick = self._icon_button(self._draw_clip, "빠른 붙여넣기",
+                                           self._toggle_quick,
+                                           active=bool(self.config.get("quickbar_open", False)))
+        self.btn_quick.pack(side="right", padx=(6, 0))
+        self.btn_compare = self._icon_button(self._draw_compare, "결재 전후 비교",
+                                             self.compare_screens)
+        self.btn_compare.pack(side="right", padx=(6, 0))
+        self.btn_top = self._icon_button(self._draw_pin, "항상 위에 두기",
+                                         self._toggle_top,
+                                         active=bool(self.config.get("on_top", True)))
+        self.btn_top.pack(side="right", padx=(6, 0))
+
+        # 접으면 머리말만 남기고 이 아래가 통째로 사라진다
+        self.shell = tk.Frame(outer, bg=PAPER)
+        self.shell.pack(fill="both", expand=True)
+
+        self.opacity_row = tk.Frame(self.shell, bg=PAPER)
+        self.opacity_row.pack(fill="x", padx=12, pady=(3, 3))
+        tk.Label(self.opacity_row, text="투명도", font=self.f_small,
+                 bg=PAPER, fg=SOFT).pack(side="left", padx=(0, 8))
+        self.opacity_slider = tk.Canvas(self.opacity_row, height=16, bg=PAPER,
+                                        highlightthickness=0, cursor="hand2")
+        self.opacity_slider.pack(side="left", fill="x", expand=True)
+        self._wire_opacity_slider()
+
+        self.summary = tk.Label(self.shell, text="읽는 중", font=self.f_head,
+                                bg=PAPER, fg=SOFT, anchor="w")
         self.summary.pack(fill="x", padx=12, pady=(0, 1))
 
-        self.folderline = tk.Label(outer, font=self.f_small, bg=PAPER, fg=SOFT,
-                                   anchor="w", cursor="hand2")
-        self.folderline.pack(fill="x", padx=12, pady=(0, 8))
-        self.folderline.bind("<Button-1>", lambda e: self.show_folder())
-        self.folderline.bind("<Enter>", lambda e: self.folderline.config(fg=INK))
-        self.folderline.bind("<Leave>", lambda e: self.folderline.config(fg=SOFT))
+        self.folderchip = tk.Canvas(self.shell, height=24, bg=PAPER,
+                                    highlightthickness=0, cursor="hand2")
+        self.folderchip.pack(fill="x", padx=12, pady=(0, 8))
+        self._folder_text = ""
+        self._folder_hover = False
+        self.folderchip.bind("<Button-1>", lambda e: self.show_folder())
+        self.folderchip.bind("<Enter>", lambda e: self._paint_folder(hover=True))
+        self.folderchip.bind("<Leave>", lambda e: self._paint_folder(hover=False))
+        self.folderchip.bind("<Configure>", lambda e: self._paint_folder())
         self._paint_folder()
 
-        self.body = tk.Frame(outer, bg=PAPER)
+        self.body = tk.Frame(self.shell, bg=PAPER)
         self.body.pack(fill="both", expand=True)
 
         self.rows = tk.Frame(self.body, bg=PAPER)
@@ -155,6 +189,137 @@ class Widget:
         self.quick = tk.Frame(self.body, bg=PAPER)
         self._quick_open = bool(self.config.get("quickbar_open", False))
 
+    # ------------------------------------------------------- 머리말 아이콘
+
+    def _text_button(self, text, tip, command):
+        """— 나 ✕ 처럼 글자 하나로 된 머리말 단추. 설명풍선이 붙는다."""
+        label = tk.Label(self.head, text=text, font=self.f_head, bg=PAPER,
+                         fg=SOFT, cursor="hand2")
+        label.bind("<Button-1>", lambda e: command())
+        label.bind("<Enter>", lambda e: (label.config(fg=INK),
+                                         self._tip_schedule(label, tip)))
+        label.bind("<Leave>", lambda e: (label.config(fg=SOFT), self._tip_cancel()))
+        self._no_drag.add(label)
+        return label
+
+    def _icon_button(self, draw, tip, command, active=False):
+        """Canvas 로 직접 그리는 머리말 아이콘. active 면 눌린 듯 진하게."""
+        icon = tk.Canvas(self.head, width=18, height=18, bg=PAPER,
+                         highlightthickness=0, cursor="hand2")
+        icon._draw, icon._active = draw, active
+        draw(icon, active)
+        icon.bind("<Button-1>", lambda e: command())
+        icon.bind("<Enter>", lambda e: (draw(icon, True),
+                                        self._tip_schedule(icon, tip)))
+        icon.bind("<Leave>", lambda e: (draw(icon, icon._active), self._tip_cancel()))
+        self._no_drag.add(icon)
+        return icon
+
+    def _set_icon_active(self, icon, active):
+        icon._active = active
+        icon._draw(icon, active)
+
+    def _draw_pin(self, c, on):
+        """압정을 정면에서 본 모양. 켜져 있으면 머리를 채운다."""
+        c.delete("all")
+        line = INK if on else SOFT
+        head = SLATE if on else PAPER
+        c.create_oval(4, 2, 14, 8, outline=line, width=1.4, fill=head)   # 머리 원반
+        c.create_polygon(7, 8, 11, 8, 10, 13, 8, 13, fill=line, outline=line)  # 몸통
+        c.create_line(9, 13, 9, 17, fill=line, width=1.6, capstyle="round")   # 바늘
+
+    def _draw_compare(self, c, hover):
+        """가운데가 갈린 직사각형. 왼쪽 원본(초록), 오른쪽 수정(빨강)."""
+        c.delete("all")
+        c.create_rectangle(2, 3, 9, 16, fill=MOSS, width=0)
+        c.create_rectangle(9, 3, 16, 16, fill=SEAL, width=0)
+        c.create_line(9, 2, 9, 17, fill=PAPER, width=2)
+        c.create_rectangle(2, 3, 16, 16, outline=(INK if hover else SOFT), width=1.4)
+
+    def _draw_clip(self, c, on):
+        """집게 달린 클립보드."""
+        c.delete("all")
+        line = INK if on else SOFT
+        c.create_rectangle(3, 4, 15, 17, outline=line, width=1.4)
+        c.create_rectangle(6, 2, 12, 5, outline=line, width=1.4, fill=PAPER)
+        c.create_line(6, 9, 12, 9, fill=line, width=1.2)
+        c.create_line(6, 12, 11, 12, fill=line, width=1.2)
+
+    # -------------------------------------------------------- 설명풍선
+
+    def _tip_schedule(self, widget, text):
+        self._tip_cancel()
+        self._tip_after = self.root.after(350, lambda: self._tip_show(widget, text))
+
+    def _tip_cancel(self):
+        if self._tip_after is not None:
+            try:
+                self.root.after_cancel(self._tip_after)
+            except (ValueError, tk.TclError):
+                pass
+            self._tip_after = None
+        self._tip_hide()
+
+    def _tip_show(self, widget, text):
+        self._tip_hide()
+        tip = tk.Toplevel(self.root)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tk.Label(tip, text=text, font=self.f_small, bg=INK, fg=CARD,
+                 padx=6, pady=2).pack()
+        tip.update_idletasks()
+        x = widget.winfo_rootx() + widget.winfo_width() // 2 - tip.winfo_width() // 2
+        y = widget.winfo_rooty() + widget.winfo_height() + 5
+        tip.geometry(f"+{x}+{y}")
+        self._tip = tip
+
+    def _tip_hide(self):
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except tk.TclError:
+                pass
+            self._tip = None
+
+    # -------------------------------------------------------- 투명도 슬라이더
+
+    def _wire_opacity_slider(self):
+        s = self.opacity_slider
+        s.bind("<Configure>", lambda e: self._draw_opacity_slider())
+        s.bind("<Button-1>", lambda e: self._drag_opacity(e, done=False))
+        s.bind("<B1-Motion>", lambda e: self._drag_opacity(e, done=False))
+        s.bind("<ButtonRelease-1>", lambda e: self._drag_opacity(e, done=True))
+        s.bind("<Enter>", lambda e: self._tip_schedule(
+            s, "최대 50%까지 투명도를 조절할 수 있습니다"))
+        s.bind("<Leave>", lambda e: self._tip_cancel())
+
+    def _slider_span(self):
+        w = self.opacity_slider.winfo_width() or (WIDTH - 90)
+        return 8, max(9, w - 8)          # 조작점 반지름만큼 안쪽으로
+
+    def _draw_opacity_slider(self):
+        s = self.opacity_slider
+        s.delete("all")
+        left, right = self._slider_span()
+        mid = 8
+        value = clamp_opacity(self.config.get("opacity", 0.96))
+        frac = (value - OPACITY_MIN) / (1.0 - OPACITY_MIN)
+        knob = left + frac * (right - left)
+        s.create_line(left, mid, right, mid, fill=RULE, width=3, capstyle="round")
+        s.create_line(left, mid, knob, mid, fill=SLATE, width=3, capstyle="round")
+        s.create_oval(knob - 6, mid - 6, knob + 6, mid + 6, fill=CARD,
+                      outline=SLATE, width=1.6)
+
+    def _drag_opacity(self, event, done):
+        left, right = self._slider_span()
+        frac = min(1.0, max(0.0, (event.x - left) / (right - left)))
+        value = OPACITY_MIN + frac * (1.0 - OPACITY_MIN)
+        # 끄는 동안에는 화면만, 손을 뗄 때 한 번만 저장한다.
+        self._set_opacity(value, remember=done)
+        if not done:
+            self.config["opacity"] = clamp_opacity(value)   # 슬라이더가 따라오도록
+        self._draw_opacity_slider()
+
     # --------------------------------------------------------- 빠른 붙여넣기
 
     def _render_quick(self):
@@ -164,7 +329,7 @@ class Widget:
             self.quick.pack(fill="x")
         else:
             self.quick.pack_forget()
-        self.btn_quick.config(fg=INK if self._quick_open else SOFT)
+        self._set_icon_active(self.btn_quick, self._quick_open)
         self._fit_height()
 
     def _toggle_quick(self):
@@ -347,10 +512,23 @@ class Widget:
         window.grab_set()
         box.focus_set()
 
-    def _paint_folder(self):
+    def _paint_folder(self, hover: bool | None = None):
+        """폴더 위치를 라운드 박스에 그린다. 눌러서 열 수 있다는 뜻으로,
+        마우스를 올리면 바탕이 살짝 밝아진다."""
+        if hover is not None:
+            self._folder_hover = hover
         parts = self.folder.parts
         short = " › ".join(parts[-2:]) if len(parts) >= 2 else str(self.folder)
-        self.folderline.config(text="폴더  " + _shorten(short, 32))
+        self._folder_text = "폴더  " + _shorten(short, 32)
+
+        c = self.folderchip
+        c.delete("all")
+        w = c.winfo_width() or (WIDTH - 26)
+        fill = GLOW if self._folder_hover else CARD
+        outline = SOFT if self._folder_hover else RULE
+        _round_rect(c, 1, 1, w - 2, 22, 8, fill=fill, outline=outline, width=1)
+        c.create_text(11, 11, text=self._folder_text, anchor="w",
+                      font=self.f_small, fill=INK)
 
     def show_folder(self):
         """지금 읽고 있는 폴더를 보여 주고, 원하면 바꾸게 한다."""
@@ -475,18 +653,17 @@ class Widget:
         self.root.geometry(f"{WIDTH}x{height}+{self.root.winfo_x()}+{self.root.winfo_y()}")
 
     def _bind(self):
+        # 머리말의 빈 자리와 요약줄을 끌면 창이 움직인다. 아이콘 단추는
+        # 저마다 동작이 있으므로(_no_drag) 끌기에서 뺀다.
         for target in (self.head, self.summary):
             target.bind("<Button-1>", self._drag_start)
             target.bind("<B1-Motion>", self._drag_move)
             target.bind("<ButtonRelease-1>", self._drag_end)
         for child in self.head.winfo_children():
-            if child not in (self.btn_close, self.btn_fold, self.btn_quick):
+            if child not in self._no_drag:
                 child.bind("<Button-1>", self._drag_start)
                 child.bind("<B1-Motion>", self._drag_move)
                 child.bind("<ButtonRelease-1>", self._drag_end)
-        self.btn_close.bind("<Button-1>", lambda e: self.quit())
-        self.btn_fold.bind("<Button-1>", lambda e: self.toggle_fold())
-        self.btn_quick.bind("<Button-1>", lambda e: self._toggle_quick())
         self.root.bind("<Button-3>", self._menu)
         self.root.bind("<Escape>", lambda e: self.quit())
 
@@ -640,13 +817,14 @@ class Widget:
     def toggle_fold(self):
         self.collapsed = not self.collapsed
         if self.collapsed:
-            self.body.pack_forget()
-            self.root.geometry(f"{WIDTH}x62")
+            self.shell.pack_forget()
+            self.root.geometry(f"{WIDTH}x54")
             self.btn_fold.config(text="□")
         else:
-            self.body.pack(fill="both", expand=True)
+            self.shell.pack(fill="both", expand=True)
             self.btn_fold.config(text="—")
             self._render_quick()
+            self._draw_opacity_slider()
             self._fit_height()
 
     def compare_screens(self):
@@ -687,33 +865,12 @@ class Widget:
         self.root.update()
 
     def _menu(self, event):
+        # 나머지 기능은 모두 머리말 아이콘·슬라이더·폴더 박스로 옮겼다.
+        # 여기에는 손 갈 일 없는 두 가지만 남긴다.
         menu = tk.Menu(self.root, tearoff=0)
-        on_top = bool(self.config.get("on_top", True))
-        menu.add_command(label="항상 위에 두기 " + ("끄기" if on_top else "켜기"),
-                         command=self._toggle_top)
-        menu.add_command(label="투명도 조절", command=self.show_opacity)
-        menu.add_command(label="빠른 붙여넣기 " + ("숨기기" if self._quick_open else "보이기"),
-                         command=self._toggle_quick)
-        menu.add_separator()
-        menu.add_command(label="공문 폴더 확인", command=self.show_folder)
-        menu.add_command(label="공문 폴더 열기", command=lambda: open_in_os(self.folder))
-        menu.add_command(label="공문 폴더 바꾸기", command=self._change_folder)
-        menu.add_command(label="전체 화면 열기", command=self.open_browser)
-        menu.add_separator()
-        menu.add_command(label="결재 전후 비교", command=self.compare_screens)
-        menu.add_separator()
-        menu.add_command(label="컴퓨터 켤 때 자동 실행 " + ("끄기" if startup_enabled() else "켜기"),
-                         command=self._toggle_startup)
         menu.add_command(label="업데이트 확인", command=lambda: self.check_update(quiet=False))
         menu.add_command(label=f"버전 {VERSION}", state="disabled")
-        menu.add_separator()
-        menu.add_command(label="닫기", command=self.quit)
         menu.tk_popup(event.x_root, event.y_root)
-
-    def _toggle_startup(self):
-        from tkinter import messagebox
-        message = set_startup(not startup_enabled())
-        messagebox.showinfo("공문 정리함", message)
 
     def _change_folder(self):
         from tkinter import filedialog
@@ -735,6 +892,7 @@ class Widget:
         self.config["on_top"] = value
         save_config(self.config)
         self.root.attributes("-topmost", value)
+        self._set_icon_active(self.btn_top, value)
 
     def _set_opacity(self, value: float, remember: bool = True):
         """창을 얼마나 비쳐 보이게 할지 정한다. 0.5 아래로는 내리지 않는다.
@@ -747,66 +905,6 @@ class Widget:
         if remember:
             self.config["opacity"] = value
             save_config(self.config)
-
-    def show_opacity(self):
-        """투명도를 손잡이로 조절한다. 끄는 동안 바로바로 반영된다."""
-        window = tk.Toplevel(self.root)
-        window.title("투명도")
-        window.configure(bg=PAPER)
-        window.resizable(False, False)
-        window.transient(self.root)
-
-        frame = tk.Frame(window, bg=PAPER)
-        frame.pack(fill="both", expand=True, padx=18, pady=16)
-
-        tk.Label(frame, text="최대 50%까지 투명도를 조절할 수 있습니다", font=self.f_head,
-                 bg=PAPER, fg=INK, anchor="w").pack(fill="x")
-        readout = tk.Label(frame, font=self.f_small, bg=PAPER, fg=SOFT, anchor="w")
-        readout.pack(fill="x", pady=(2, 6))
-
-        start = round(float(self.config.get("opacity", 0.96)) * 100)
-        slider = tk.Scale(
-            frame, from_=int(OPACITY_MIN * 100), to=100, orient="horizontal",
-            showvalue=False, length=280, bg=PAPER, fg=INK, troughcolor=CARD,
-            highlightthickness=0, bd=0, sliderrelief="flat", activebackground=SLATE,
-        )
-        slider.set(max(int(OPACITY_MIN * 100), min(100, start)))
-        slider.pack(fill="x")
-
-        def slide(raw):
-            percent = int(float(raw))
-            # 끄는 동안에는 화면만 바꾸고, 손을 뗄 때 한 번만 저장한다.
-            # 매 픽셀마다 설정 파일을 쓰면 디스크를 쉴 새 없이 두드린다.
-            self._set_opacity(percent / 100, remember=False)
-            readout.config(text=f"{percent}%" + ("  (원래대로)" if percent == 100 else ""))
-
-        slider.config(command=slide)
-        slide(slider.get())
-        slider.bind("<ButtonRelease-1>",
-                    lambda e: self._set_opacity(slider.get() / 100))
-        slider.bind("<KeyRelease>",
-                    lambda e: self._set_opacity(slider.get() / 100))
-
-        ends = tk.Frame(frame, bg=PAPER)
-        ends.pack(fill="x")
-        tk.Label(ends, text="흐리게", font=self.f_small, bg=PAPER, fg=SOFT).pack(side="left")
-        tk.Label(ends, text="진하게", font=self.f_small, bg=PAPER, fg=SOFT).pack(side="right")
-
-        def finish():
-            self._set_opacity(slider.get() / 100)
-            window.destroy()
-
-        buttons = tk.Frame(frame, bg=PAPER)
-        buttons.pack(fill="x", pady=(14, 0))
-        self._foot_button(buttons, "확인", lambda e=None: finish()).pack(side="right")
-        self._foot_button(
-            buttons, "원래대로",
-            lambda e=None: (slider.set(100), self._set_opacity(1.0))).pack(side="left")
-
-        window.protocol("WM_DELETE_WINDOW", finish)
-        window.update_idletasks()
-        window.geometry(f"+{self.root.winfo_x() - 40}+{self.root.winfo_y() + 60}")
-        window.grab_set()
 
     def check_update(self, quiet: bool = True) -> None:
         """새 버전이 있는지 알아본다. quiet면 없을 때 아무 말도 하지 않는다."""
@@ -1100,71 +1198,14 @@ def _one_line(text: str, limit: int) -> str:
     return flat if len(flat) <= limit else flat[:limit - 1] + "…"
 
 
-def _startup_dir() -> Path:
-    return Path.home() / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
-
-
-def _startup_shortcut() -> Path:
-    return _startup_dir() / "공문정리함.lnk"
-
-
-def startup_enabled() -> bool:
-    return _startup_shortcut().exists() or (_startup_dir() / "공문정리함.bat").exists()
-
-
-def _launch_target() -> tuple[str, str, str]:
-    """(실행할 파일, 인수, 작업 폴더)를 돌려준다."""
-    if getattr(sys, "frozen", False):
-        exe = Path(sys.executable)
-        return str(exe), "", str(exe.parent)
-    script = Path(__file__).resolve()
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    runner = pythonw if pythonw.exists() else Path(sys.executable)
-    return str(runner), f'"{script}"', str(script.parent)
-
-
-def set_startup(enable: bool) -> str:
-    """윈도우 시작 폴더에 바로가기를 넣거나 뺀다."""
-    link = _startup_shortcut()
-    legacy = _startup_dir() / "공문정리함.bat"
-    if not enable:
-        link.unlink(missing_ok=True)
-        legacy.unlink(missing_ok=True)
-        return "컴퓨터를 켤 때 자동으로 뜨지 않습니다."
-    if not link.parent.is_dir():
-        return "이 컴퓨터에서는 자동 시작을 설정할 수 없습니다."
-
-    target, arguments, workdir = _launch_target()
-    if _make_shortcut(link, target, arguments, workdir):
-        legacy.unlink(missing_ok=True)
-        return "이제 컴퓨터를 켜면 자동으로 뜹니다."
-    return "자동 시작을 설정하지 못했습니다. 바탕화면 바로가기를 시작 폴더에 직접 넣어 주세요."
-
-
-def _make_shortcut(link: Path, target: str, arguments: str, workdir: str) -> bool:
-    """윈도우 스크립트 호스트를 빌려 .lnk 파일을 만든다. 창은 뜨지 않는다."""
-    if not sys.platform.startswith("win"):
-        return False
-    import tempfile
-    script = (
-        'Set shell = CreateObject("WScript.Shell")\n'
-        f'Set link = shell.CreateShortcut("{link}")\n'
-        f'link.TargetPath = "{target}"\n'
-        f'link.Arguments = "{arguments}"\n'
-        f'link.WorkingDirectory = "{workdir}"\n'
-        'link.WindowStyle = 7\n'
-        'link.Save\n'
-    )
-    path = Path(tempfile.gettempdir()) / "gongmun_link.vbs"
-    try:
-        path.write_text(script, encoding="utf-8-sig")
-        subprocess.run(["cscript", "//nologo", str(path)], check=True, timeout=15,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        return link.exists()
-    except Exception:  # noqa: BLE001
-        return False
-    finally:
-        path.unlink(missing_ok=True)
+def _round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kw):
+    """모서리가 둥근 사각형. Canvas 에는 없어서 곡선을 이어 만든다."""
+    r = min(r, (x2 - x1) / 2, (y2 - y1) / 2)
+    points = [
+        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+        x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, **kw)
 
 
 def first_run_guide(folder: Path) -> None:

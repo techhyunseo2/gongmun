@@ -84,9 +84,9 @@ class QuickBar(unittest.TestCase):
 class Wording(unittest.TestCase):
     """사용자가 직접 정한 문구. 업데이트 때 되돌리지 말 것.
 
-    슬라이더 창 머리말은 사용자가 커밋 6499304 에서 손수 고친 것이다.
-    "더 나은 표현" 으로 바꾸지 말고 그대로 둔다. 바꿔야 할 사정이 생기면
-    사용자에게 먼저 물어본다.
+    이 문구는 사용자가 커밋 6499304 에서 손수 고친 것이다. "더 나은 표현"
+    으로 바꾸지 말고 그대로 둔다. 1.7.2 부터는 투명도 슬라이더가 머리말
+    바로 아래로 옮겨졌고, 이 문구는 그 슬라이더의 설명풍선으로 산다.
     """
 
     HEADING = "최대 50%까지 투명도를 조절할 수 있습니다"
@@ -96,8 +96,8 @@ class Wording(unittest.TestCase):
 
     def test_slider_heading_is_untouched(self):
         self.assertIn(
-            f'text="{self.HEADING}"', self.source,
-            "슬라이더 머리말은 사용자가 정한 문구입니다. "
+            self.HEADING, self.source,
+            "슬라이더 설명풍선 문구는 사용자가 정한 것입니다. "
             f'"{self.HEADING}" 그대로 두세요.')
 
     def test_heading_matches_the_actual_floor(self):
@@ -120,9 +120,58 @@ class Menu(unittest.TestCase):
                 self.assertNotIn(gone, self.source,
                                  f'메뉴에서 "{gone}" 를 뺐어야 합니다')
 
-    def test_slider_entry_exists(self):
-        self.assertIn("투명도 조절", self.source)
-        self.assertIn("def show_opacity", self.source)
+    def test_opacity_slider_is_inline_not_in_the_menu(self):
+        """투명도는 머리말 아래 슬라이더로 바로 조절한다. 메뉴 항목은 없앴다."""
+        self.assertNotIn("투명도 조절", self.source, "메뉴 항목이 남아 있습니다")
+        self.assertIn("def _draw_opacity_slider", self.source)
+        self.assertIn("def _drag_opacity", self.source)
+
+    def test_right_click_menu_is_only_update_and_version(self):
+        """나머지는 모두 머리말 아이콘·슬라이더·폴더 박스로 옮겼다."""
+        block = self.source[self.source.index("def _menu"):]
+        block = block[:block.index("\n    def ", 10)]
+        self.assertIn("업데이트 확인", block)
+        self.assertIn("버전 {VERSION}", block)
+        for gone in ("항상 위에 두기", "공문 폴더", "결재 전후 비교",
+                     "자동 실행", "전체 화면 열기", "빠른 붙여넣기"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, block, f'메뉴에 "{gone}" 가 남아 있습니다')
+
+
+class HeaderControls(unittest.TestCase):
+    """우클릭 메뉴에 있던 것들을 머리말 아이콘·슬라이더로 옮겼다."""
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+
+    def test_three_icon_buttons_with_tips(self):
+        for maker in ('self._draw_pin, "항상 위에 두기"',
+                      'self._draw_compare, "결재 전후 비교"',
+                      'self._draw_clip, "빠른 붙여넣기"'):
+            with self.subTest(maker=maker):
+                self.assertIn(maker, self.source)
+
+    def test_every_header_button_shows_a_tip(self):
+        """아이콘에 마우스를 올리면 무슨 기능인지 떠야 한다."""
+        for fn in ("def _icon_button", "def _text_button"):
+            block = self.source[self.source.index(fn):]
+            block = block[:block.index("\n    def ", 10)]
+            self.assertIn("_tip_schedule", block, f"{fn} 에 설명풍선이 없습니다")
+        # ✕ 와 — 도 _text_button 으로 만들어 풍선이 붙는다
+        self.assertIn('self._text_button("✕", "닫기"', self.source)
+        self.assertIn('self._text_button("—", "접기"', self.source)
+
+    def test_compare_icon_is_split_green_and_red(self):
+        block = self.source[self.source.index("def _draw_compare"):]
+        block = block[:block.index("\n    def ", 10)]
+        self.assertIn("MOSS", block)
+        self.assertIn("SEAL", block)
+
+    def test_folder_is_a_rounded_box_that_brightens_on_hover(self):
+        block = self.source[self.source.index("def _paint_folder"):]
+        block = block[:block.index("\n    def ", 10)]
+        self.assertIn("_round_rect", block)
+        self.assertIn("GLOW if self._folder_hover", block)
 
 
 class BringingItBack(unittest.TestCase):
@@ -234,20 +283,18 @@ class BringingItBack(unittest.TestCase):
         finish = finish[:finish.index("\n    def ", 10)]
         self.assertIn("overrideredirect(True)", finish)
 
-    def test_uninstaller_removes_the_startup_shortcut_the_app_makes(self):
-        """프로그램 안에서 만든 자동 실행 바로가기를 지울 때도 치워야 한다.
+    def test_uninstaller_still_cleans_the_legacy_startup_shortcut(self):
+        """1.7.1 이하에서 프로그램 메뉴로 자동 실행을 켜 두신 분들이 있다.
 
-        설치할 때 만드는 것(이름에 띄어쓰기 있음)과 프로그램 메뉴로 만드는
-        것(띄어쓰기 없음)의 파일명이 달라, 하나만 지우면 죽은 바로가기가
-        시작 폴더에 남는다.
+        그 메뉴는 1.7.2 에서 없앴지만, 그때 만들어 둔 띄어쓰기 없는 바로가기
+        (공문정리함.lnk / .bat)는 시작 폴더에 그대로 남아 있다. 지울 때
+        같이 치워야 죽은 바로가기가 안 남는다.
         """
         iss = (ROOT / "installer.iss").read_text(encoding="utf-8")
-        source = (ROOT / "widget.py").read_text(encoding="utf-8")
         for name in ("공문정리함.lnk", "공문정리함.bat"):
             with self.subTest(name=name):
-                self.assertIn(name, source, "set_startup 가 만드는 이름이 바뀌었습니다")
                 self.assertIn(name, iss,
-                              f"installer.iss 의 [UninstallDelete] 에 {name} 을 넣어 주세요")
+                              f"installer.iss 의 [UninstallDelete] 에 {name} 을 남겨 두세요")
 
     def test_uninstaller_asks_before_deleting_records(self):
         """설정·기록(.gongmun)은 물어보고, 기본은 남기는 쪽이어야 한다."""

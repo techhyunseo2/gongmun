@@ -61,8 +61,9 @@ Filename: "{app}\{#AppExe}"; Description: "지금 실행하기"; Flags: nowait p
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userstartup}\{#AppName}.lnk"
-; 프로그램 안 "컴퓨터 켤 때 자동 실행" 으로 만든 바로가기는 이름에 띄어쓰기가
-; 없다(widget.py 의 set_startup). 설치할 때 만든 것과 파일명이 달라 따로 지운다.
+; 1.7.1 이하에는 프로그램 안에 "컴퓨터 켤 때 자동 실행" 토글이 있었고, 그때
+; 만든 바로가기는 이름에 띄어쓰기가 없다. 그 토글은 1.7.2 에서 없앴지만 이미
+; 만들어진 바로가기는 남아 있으므로 지울 때 함께 치운다.
 Type: files; Name: "{userstartup}\공문정리함.lnk"
 Type: files; Name: "{userstartup}\공문정리함.bat"
 
