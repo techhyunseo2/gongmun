@@ -41,7 +41,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.7.3"
+VERSION = "1.7.4"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -360,8 +360,9 @@ def build_ics(docs: list[dict]) -> str:
             continue
         # 종일 일정은 DTEND(다음 날)가 없으면 구글 캘린더가 조용히 무시한다.
         end = start + timedelta(days=1)
-        prefix = "[마감] " if doc.get("deadline") else "[일정] "
-        summary = _ics_escape(prefix + (doc.get("title") or doc["filename"]))[:180]
+        # "[마감]" 같은 앞말은 붙이지 않는다 — 캘린더에 한번 넣으면 상태가
+        # 바뀌어도 따라 갱신되지 않아 오히려 헷갈린다.
+        summary = _ics_escape(doc.get("title") or doc["filename"])[:180]
         detail = _ics_escape((doc.get("summary") or "")[:300])
         lines += [
             "BEGIN:VEVENT",

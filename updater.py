@@ -74,6 +74,10 @@ def check() -> dict | None:
         return None
 
     info = _release_info()
+    # 게시가 진행되는 몇 분 동안 releases/latest 리다이렉트와 API 응답이
+    # 서로 다른 버전을 가리킬 수 있다. API 가 태그를 알려 주면 설명글과
+    # 짝이 맞도록 그쪽을 쓴다.
+    tag = info.get("tag") or tag
     fallback = DOWNLOAD.format(repo=UPDATE_REPO, tag=quote(tag),
                                asset=quote(ASSET_NAME))
     return {
@@ -128,6 +132,9 @@ def _release_info() -> dict:
 def _parse_release(release: dict) -> dict:
     """API 응답에서 설명글과 내려받을 exe 주소를 뽑는다."""
     info = {"notes": (release.get("body") or "").strip()[:400]}
+    tag = str(release.get("tag_name") or "").strip()
+    if tag and not release.get("draft"):
+        info["tag"] = tag
     exes = [a for a in release.get("assets", [])
             if str(a.get("name", "")).lower().endswith(".exe")
             and a.get("state", "uploaded") == "uploaded"
