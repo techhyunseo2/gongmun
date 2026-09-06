@@ -81,6 +81,116 @@ class QuickBar(unittest.TestCase):
         self.assertIn("clipboard_append", copy)
 
 
+class ToolDrawer(unittest.TestCase):
+    """도구 서랍 — 등록한 프로그램·폴더·파일·웹 주소를 눌러 연다."""
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+
+    def _block(self, name):
+        block = self.source[self.source.index(f"def {name}"):]
+        return block[:block.index("\n    def ", 10)]
+
+    def test_launcher_button_in_header_with_a_tip(self):
+        self.assertIn('self._draw_tools, "도구 서랍"', self.source)
+
+    def test_icon_is_a_three_by_three_grid(self):
+        block = self._block("_draw_tools")
+        self.assertIn("range(3)", block)
+        self.assertIn("create_rectangle", block)
+        self.assertIn("SLATE if on else SOFT", block, "켜지면 칸이 차야 합니다")
+
+    def test_registrations_are_persisted(self):
+        for key in ('"tools"', '"tools_open"'):
+            with self.subTest(key=key):
+                self.assertIn(key, self.source)
+        block = self._block("_edit_tools")
+        self.assertIn("save_config(self.config)", block)
+        for field in ('"name"', '"path"', '"icon"'):
+            with self.subTest(field=field):
+                self.assertIn(field, block)
+
+    def test_order_can_be_reordered(self):
+        block = self._block("_edit_tools")
+        self.assertIn("self._tool_rows.insert(j, self._tool_rows.pop(i))", block)
+        self.assertIn("줄 순서가 곧 서랍의 배치 순서", self.source)
+
+    def test_clicking_a_tile_opens_the_target(self):
+        block = self._block("_open_tool")
+        self.assertIn("open_in_os", block)
+        self.assertIn("webbrowser.open", block)   # 웹 주소도 연다
+
+    def test_missing_target_does_not_crash(self):
+        block = self._block("_open_tool")
+        self.assertIn("spot.exists()", block)
+
+    def test_blank_icon_falls_back_to_the_program_own_icon(self):
+        """이모지를 안 넣으면 그 프로그램·폴더의 실제 아이콘을 뽑아 쓴다."""
+        self.assertIn("def _win_file_icon", self.source)
+        self.assertIn("SHGetFileInfoW", self.source)
+        self.assertIn("DrawIconEx", self.source)
+        tile = self._block("_tool_tile")
+        self.assertIn("_tool_icon_image", tile)
+        # 사용자 이모지가 있으면 그게 먼저, 없을 때만 실제 아이콘
+        self.assertIn("None if custom else self._tool_icon_image", tile)
+        self.assertIn("name[:1]", tile, "그것마저 없으면 별명 첫 글자")
+
+    def test_icon_extraction_never_breaks_the_drawer(self):
+        block = self._block("_tool_icon_image")
+        self.assertIn("except Exception", block)
+        self.assertIn('sys.platform != "win32"', block)
+        self.assertIn("self._icon_cache[key] = image", block)  # None 도 캐시
+
+    def test_all_drawers_close_cleanly_and_reflow(self):
+        """세 서랍(클립보드·도구·결재 비교)이 같은 방식으로 열고 닫힌다.
+        닫으면 하단부까지 사라지고, 하나를 닫으면 아래 것이 올라온다."""
+        block = self._block("_render_drawers")
+        self.assertIn("self.quick, self.tools, self.compare", block)
+        self.assertIn("drawer.pack_forget()", block)
+        # 매번 전부 뗐다가 열린 것만 순서대로 다시 붙인다
+        self.assertLess(block.index("pack_forget"), block.index('self.quick.pack(fill="x")'))
+        self.assertLess(block.index('self.quick.pack(fill="x")'),
+                        block.index('self.tools.pack(fill="x")'))
+        self.assertLess(block.index('self.tools.pack(fill="x")'),
+                        block.index('self.compare.pack(fill="x")'))
+        # 서랍을 미리 깔아 두지 않는다 (빈 자리가 남던 원인)
+        build = self._block("_build")
+        for pre in ("self.tools.pack(", "self.compare.pack("):
+            self.assertNotIn(pre, build)
+
+
+class CompareDrawer(unittest.TestCase):
+    """결재 전후 비교 — 다른 도구처럼 머리말 아이콘을 누르면 서랍이 열린다."""
+
+    NOTE = ("결재 창의 '이력보기' 탭에서 활용 가능하며 픽셀 단위로 결재 "
+            "문서 전후를 비교하여 줍니다. 결재 문서의 내용은 읽지 못하며 "
+            "픽셀이 변경된 부분만 감지하기 때문에 오차가 있을 수 있습니다.")
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+
+    def _block(self, name):
+        block = self.source[self.source.index(f"def {name}"):]
+        return block[:block.index("\n    def ", 10)]
+
+    def test_header_icon_toggles_a_drawer_now(self):
+        self.assertIn('self._draw_compare, "결재 전후 비교"', self.source)
+        self.assertIn("self._toggle_compare", self.source)
+        self.assertIn('"compare_open"', self.source)
+
+    def test_drawer_carries_the_exact_guidance_text(self):
+        # 사용자가 그대로 정한 문구다. 다듬지 말 것.
+        self.assertEqual(widget.COMPARE_NOTE, self.NOTE)
+        self.assertIn("COMPARE_NOTE", self._block("_build_compare"))
+
+    def test_a_crop_button_runs_the_original_compare(self):
+        block = self._block("_build_compare")
+        self.assertIn("_draw_crop", block)
+        self.assertIn("self.compare_screens()", block)
+        crop = self._block("_draw_crop")
+        self.assertIn("create_line", crop)
+
+
 class Wording(unittest.TestCase):
     """사용자가 직접 정한 문구. 업데이트 때 되돌리지 말 것.
 

@@ -58,6 +58,12 @@ UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시
 OPACITY_MIN = 0.5           # 더 흐려지면 위젯을 찾지 못해 되돌릴 길이 없어진다
 CLIP_MAX = 12               # 담아 둔 글은 이만큼만 두고 오래된 것부터 밀어낸다
 GLYPH_MAX = 40              # 고정해 둘 특수문자·문구 개수 상한
+TOOL_MAX = 18              # 도구 서랍에 등록해 둘 프로그램·폴더·파일 개수 상한
+
+# 결재 전후 비교 서랍의 안내 문구. 사용자가 그대로 정한 것 — 다듬지 말 것.
+COMPARE_NOTE = ("결재 창의 '이력보기' 탭에서 활용 가능하며 픽셀 단위로 결재 "
+                "문서 전후를 비교하여 줍니다. 결재 문서의 내용은 읽지 못하며 "
+                "픽셀이 변경된 부분만 감지하기 때문에 오차가 있을 수 있습니다.")
 
 
 class Widget:
@@ -71,6 +77,7 @@ class Widget:
         self.scanning = False
         self._seen_rev = -1     # 마지막으로 반영한 저장소 번호
         self._drawn = None      # 마지막으로 그린 내용. 같으면 다시 그리지 않는다
+        self._icon_cache = {}   # 도구 서랍이 뽑아 온 실제 아이콘 (경로별로 한 번만)
 
         self.root = tk.Tk()
         self.root.title("공문 정리함")
@@ -84,7 +91,7 @@ class Widget:
         self._build()
         self._place()
         self._bind()
-        self._render_quick()
+        self._render_drawers()
         self._draw_opacity_slider()
         self._claim_taskbar_button()
 
@@ -133,8 +140,13 @@ class Widget:
                                            self._toggle_quick,
                                            active=bool(self.config.get("quickbar_open", False)))
         self.btn_quick.pack(side="right", padx=(6, 0))
+        self.btn_tools = self._icon_button(self._draw_tools, "도구 서랍",
+                                           self._toggle_tools,
+                                           active=bool(self.config.get("tools_open", False)))
+        self.btn_tools.pack(side="right", padx=(6, 0))
         self.btn_compare = self._icon_button(self._draw_compare, "결재 전후 비교",
-                                             self.compare_screens)
+                                             self._toggle_compare,
+                                             active=bool(self.config.get("compare_open", False)))
         self.btn_compare.pack(side="right", padx=(6, 0))
         self.btn_top = self._icon_button(self._draw_ontop, "항상 위에 두기",
                                          self._toggle_top,
@@ -194,6 +206,15 @@ class Widget:
         self.quick = tk.Frame(self.body, bg=PAPER)
         self._quick_open = bool(self.config.get("quickbar_open", False))
 
+        # 도구 서랍 — 등록해 둔 프로그램·폴더·파일·웹 주소를 눌러 연다.
+        # 커스텀 클립보드와 같은 방식으로 열고 닫는다(_render_drawers 가 관리).
+        self.tools = tk.Frame(self.body, bg=PAPER)
+        self._tools_open = bool(self.config.get("tools_open", False))
+
+        # 결재 전후 비교 — 안내 문구와, 누르면 비교가 시작되는 단추가 든 서랍.
+        self.compare = tk.Frame(self.body, bg=PAPER)
+        self._compare_open = bool(self.config.get("compare_open", False))
+
     # ------------------------------------------------------- 머리말 아이콘
 
     def _text_button(self, text, tip, command):
@@ -251,6 +272,24 @@ class Widget:
         c.create_rectangle(6, 2, 12, 5, outline=line, width=1.4, fill=PAPER)
         c.create_line(6, 9, 12, 9, fill=line, width=1.2)
         c.create_line(6, 12, 11, 12, fill=line, width=1.2)
+
+    def _draw_tools(self, c, on):
+        """3×3 칸이 격자로 놓인 모양(구글 앱 메뉴처럼). 켜지면 칸이 찬다."""
+        c.delete("all")
+        fill = SLATE if on else SOFT
+        for r in range(3):
+            for col in range(3):
+                x, y = 2 + col * 6, 2 + r * 6
+                c.create_rectangle(x, y, x + 4, y + 4, fill=fill, width=0)
+
+    def _draw_crop(self, c, on):
+        """사진 편집 프로그램의 '자르기' 표시 — ㄱ자 두 개가 어긋나게 겹친 모양."""
+        c.delete("all")
+        line = INK if on else SOFT
+        c.create_line(3, 6, 15, 6, fill=line, width=1.6)      # 위 걸침
+        c.create_line(6, 3, 6, 15, fill=line, width=1.6)      # 왼쪽 걸침
+        c.create_line(3, 12, 12, 12, fill=line, width=1.6)    # 아래 걸침
+        c.create_line(12, 6, 12, 16, fill=line, width=1.6)    # 오른쪽 걸침
 
     # -------------------------------------------------------- 설명풍선
 
@@ -331,21 +370,36 @@ class Widget:
 
     # ------------------------------------------------------- 커스텀 클립보드
 
-    def _render_quick(self):
-        """열림 상태에 맞춰 서랍을 그리거나 감춘다."""
-        if self._quick_open and not self.collapsed:
-            self._build_quick()
-            self.quick.pack(fill="x")
-        else:
-            self.quick.pack_forget()
+    def _render_drawers(self):
+        """머리말 아래 세 서랍(커스텀 클립보드·도구·결재 비교)을 정해진
+        순서로 다시 깐다.
+
+        매번 전부 떼었다가 열린 것만 다시 붙인다. 그래야 위 서랍을 닫으면
+        아래 서랍이 곧바로 그 자리로 올라오고, 닫힌 서랍의 빈 자리도 남지
+        않는다.
+        """
+        for drawer in (self.quick, self.tools, self.compare):
+            drawer.pack_forget()
+        if not self.collapsed:
+            if self._quick_open:
+                self._build_quick()
+                self.quick.pack(fill="x")
+            if self._tools_open:
+                self._build_tools()
+                self.tools.pack(fill="x")
+            if self._compare_open:
+                self._build_compare()
+                self.compare.pack(fill="x")
         self._set_icon_active(self.btn_quick, self._quick_open)
+        self._set_icon_active(self.btn_tools, self._tools_open)
+        self._set_icon_active(self.btn_compare, self._compare_open)
         self._fit_height()
 
     def _toggle_quick(self):
         self._quick_open = not self._quick_open
         self.config["quickbar_open"] = self._quick_open
         save_config(self.config)
-        self._render_quick()
+        self._render_drawers()
 
     def _build_quick(self):
         q = self.quick
@@ -456,13 +510,13 @@ class Widget:
         del clips[CLIP_MAX:]
         self.config["clips"] = clips
         save_config(self.config)
-        self._render_quick()
+        self._render_drawers()
 
     def _forget_clip(self, text: str):
         clips = [c for c in (self.config.get("clips") or []) if c != text]
         self.config["clips"] = clips
         save_config(self.config)
-        self._render_quick()
+        self._render_drawers()
 
     def _move_clip(self, text: str, delta: int):
         """담아 둔 글을 한 칸 위나 아래로 옮긴다."""
@@ -476,12 +530,12 @@ class Widget:
         clips.insert(there, clips.pop(here))
         self.config["clips"] = clips
         save_config(self.config)
-        self._render_quick()
+        self._render_drawers()
 
     def _clear_clips(self):
         self.config["clips"] = []
         save_config(self.config)
-        self._render_quick()
+        self._render_drawers()
 
     def _edit_glyphs(self):
         """자주 쓰는 문자를 한 줄에 하나씩 적어 두는 작은 창."""
@@ -508,7 +562,7 @@ class Widget:
             self.config["glyphs"] = [ln for ln in lines if ln][:GLYPH_MAX]
             save_config(self.config)
             window.destroy()
-            self._render_quick()
+            self._render_drawers()
 
         buttons = tk.Frame(frame, bg=PAPER)
         buttons.pack(fill="x", pady=(12, 0))
@@ -520,6 +574,246 @@ class Widget:
         window.geometry(f"+{self.root.winfo_x() - 40}+{self.root.winfo_y() + 60}")
         window.grab_set()
         box.focus_set()
+
+    # ----------------------------------------------------------- 도구 서랍
+
+    def _toggle_tools(self):
+        self._tools_open = not self._tools_open
+        self.config["tools_open"] = self._tools_open
+        save_config(self.config)
+        self._render_drawers()
+
+    def _build_tools(self):
+        t = self.tools
+        for child in t.winfo_children():
+            child.destroy()
+        tk.Frame(t, bg=RULE, height=1).pack(fill="x", padx=8, pady=(2, 7))
+
+        head = tk.Frame(t, bg=PAPER)
+        head.pack(fill="x", padx=12)
+        tk.Label(head, text="도구 서랍", font=self.f_small, bg=PAPER,
+                 fg=SOFT).pack(side="left")
+        self._foot_button(head, "편집",
+                          lambda e=None: self._edit_tools()).pack(side="right")
+
+        tools = list(self.config.get("tools") or [])
+        if tools:
+            grid = tk.Frame(t, bg=PAPER)
+            grid.pack(fill="x", padx=12, pady=(6, 10))
+            for i, tool in enumerate(tools):
+                self._tool_tile(grid, tool, i)
+            for col in range(3):
+                grid.columnconfigure(col, weight=1, uniform="tool")
+        else:
+            tk.Label(t, text="편집을 눌러 자주 여는 프로그램·폴더·파일·웹 주소를 "
+                             "등록해 두세요. 누르면 바로 열립니다.",
+                     font=self.f_small, bg=PAPER, fg=SOFT, anchor="w",
+                     wraplength=290, justify="left").pack(fill="x", padx=12, pady=(0, 10))
+
+    def _tool_tile(self, grid, tool, i):
+        name = tool.get("name") or tool.get("path", "")
+        path = tool.get("path", "")
+        custom = (tool.get("icon") or "").strip()
+        cell = tk.Frame(grid, bg=CARD, cursor="hand2",
+                        highlightbackground=RULE, highlightthickness=1)
+        cell.grid(row=i // 3, column=i % 3, padx=(0, 4), pady=2, sticky="nsew")
+
+        # 사용자가 아이콘(이모지)을 넣지 않았으면 그 프로그램·폴더의 실제
+        # 아이콘을 뽑아 쓴다. 그것도 못 얻으면 별명 첫 글자로 떨어진다.
+        image = None if custom else self._tool_icon_image(path, 20)
+        if image is not None:
+            top = tk.Label(cell, image=image, bg=CARD)
+            top.image = image                      # 참조가 사라지면 그림도 사라진다
+        else:
+            top = tk.Label(cell, text=(custom or name[:1] or "▸"),
+                           font=self.f_dday, bg=CARD, fg=INK)
+        top.pack(pady=(6, 0))
+        tk.Label(cell, text=_one_line(name, 8), font=self.f_small, bg=CARD,
+                 fg=SOFT).pack(pady=(0, 6))
+        for w in (cell, *cell.winfo_children()):
+            w.bind("<Button-1>", lambda e, p=path, c=cell: self._open_tool(p, c))
+            w.bind("<Enter>", lambda e, c=cell: self._tool_hi(c, True))
+            w.bind("<Leave>", lambda e, c=cell: self._tool_hi(c, False))
+
+    @staticmethod
+    def _tool_hi(cell, on):
+        try:
+            cell.config(highlightbackground=INK if on else RULE)
+        except tk.TclError:
+            pass
+
+    def _tool_icon_image(self, path: str, px: int):
+        """등록한 대상(프로그램·폴더·파일)의 실제 아이콘을 tk 그림으로.
+        윈도우가 아니거나 아이콘을 못 뽑으면 None — 부르는 쪽이 글자로 뗀다."""
+        target = (path or "").strip().strip('"').strip()
+        if sys.platform != "win32" or not target \
+                or target.startswith(("http://", "https://")):
+            return None
+        target = str(Path(target))         # 슬래시를 윈도우식으로 — 셸 API 는 / 를 싫어한다
+        key = (target, px)
+        if key in self._icon_cache:
+            return self._icon_cache[key]
+        try:
+            image = _win_file_icon(self.root, target, px, CARD)
+        except Exception:  # noqa: BLE001 — 아이콘을 못 뽑아도 서랍은 떠야 한다
+            image = None
+        self._icon_cache[key] = image      # None 도 담아 두면 다시 시도하지 않는다
+        return image
+
+    def _open_tool(self, path: str, cell=None):
+        """등록해 둔 대상을 연다. 프로그램·폴더·파일은 운영체제에 맡기고,
+        웹 주소는 브라우저로 연다. 위젯이 직접 하는 일은 '열기'뿐이다."""
+        target = (path or "").strip().strip('"').strip()
+        ok = True
+        if target.startswith(("http://", "https://")):
+            webbrowser.open(target)
+        else:
+            spot = Path(target)
+            if target and spot.exists():
+                try:
+                    open_in_os(spot)
+                except OSError:
+                    ok = False
+            else:
+                ok = False
+        if cell is not None and not ok:
+            cell.config(highlightbackground=SEAL)
+            cell.after(1100, lambda: self._tool_hi(cell, False))
+
+    def _edit_tools(self):
+        """도구를 한 줄에 하나씩 — 아이콘·별명·경로. 위아래로 순서를 바꾼다.
+        줄 순서가 곧 서랍의 배치 순서다."""
+        win = tk.Toplevel(self.root)
+        win.title("도구 서랍")
+        win.configure(bg=PAPER)
+        win.resizable(False, False)
+        win.transient(self.root)
+
+        frame = tk.Frame(win, bg=PAPER)
+        frame.pack(fill="both", expand=True, padx=18, pady=16)
+        tk.Label(frame,
+                 text="자주 여는 프로그램·폴더·파일·웹 주소를 등록하세요. 누르면 바로 열립니다.\n"
+                      "아이콘은 이모지 한 글자를 권합니다. 줄 순서가 곧 서랍의 배치 순서입니다.",
+                 font=self.f_small, bg=PAPER, fg=SOFT, justify="left",
+                 wraplength=390).pack(fill="x", pady=(0, 10))
+
+        rows = tk.Frame(frame, bg=PAPER)
+        rows.pack(fill="both")
+        self._tool_rows = []
+
+        def relayout():
+            for rec in self._tool_rows:
+                rec["frame"].pack_forget()
+            for rec in self._tool_rows:
+                rec["frame"].pack(fill="x", pady=2)
+
+        def move(rec, delta):
+            i = self._tool_rows.index(rec)
+            j = max(0, min(len(self._tool_rows) - 1, i + delta))
+            if i != j:
+                self._tool_rows.insert(j, self._tool_rows.pop(i))
+                relayout()
+
+        def drop(rec):
+            rec["frame"].destroy()
+            self._tool_rows.remove(rec)
+
+        def field(parent, width):
+            return tk.Entry(parent, width=width, font=self.f_small, bg=CARD, fg=INK,
+                            relief="flat", highlightthickness=1, highlightbackground=RULE)
+
+        def add_row(icon="", name="", path=""):
+            if len(self._tool_rows) >= TOOL_MAX:
+                return
+            r = tk.Frame(rows, bg=PAPER)
+            e_icon, e_name, e_path = field(r, 3), field(r, 10), field(r, 26)
+            e_icon.insert(0, icon)
+            e_name.insert(0, name)
+            e_path.insert(0, path)
+            e_icon.pack(side="left")
+            e_name.pack(side="left", padx=(4, 0))
+            e_path.pack(side="left", padx=(4, 0))
+            rec = {"frame": r, "icon": e_icon, "name": e_name, "path": e_path}
+            self._foot_button(r, "찾기",
+                              lambda e=None, ep=e_path: self._pick_tool_path(ep)).pack(side="left", padx=(4, 0))
+            self._foot_button(r, "▴", lambda e=None, x=rec: move(x, -1), padx=5).pack(side="left", padx=(4, 0))
+            self._foot_button(r, "▾", lambda e=None, x=rec: move(x, 1), padx=5).pack(side="left", padx=(2, 0))
+            self._foot_button(r, "✕", lambda e=None, x=rec: drop(x), padx=5).pack(side="left", padx=(2, 0))
+            self._tool_rows.append(rec)
+            relayout()
+
+        for tool in (self.config.get("tools") or []):
+            add_row(tool.get("icon", ""), tool.get("name", ""), tool.get("path", ""))
+        if not self._tool_rows:
+            add_row()
+
+        def save():
+            picked = []
+            for rec in self._tool_rows:
+                spot = rec["path"].get().strip().strip('"').strip()
+                if not spot:
+                    continue
+                name = rec["name"].get().strip() or Path(spot).stem or spot
+                picked.append({"name": name[:24], "path": spot,
+                               "icon": rec["icon"].get().strip()[:2]})
+            self.config["tools"] = picked[:TOOL_MAX]
+            save_config(self.config)
+            win.destroy()
+            self._render_drawers()
+
+        buttons = tk.Frame(frame, bg=PAPER)
+        buttons.pack(fill="x", pady=(12, 0))
+        self._foot_button(buttons, "저장", lambda e=None: save()).pack(side="right")
+        self._foot_button(buttons, "취소",
+                          lambda e=None: win.destroy()).pack(side="right", padx=(0, 6))
+        self._foot_button(buttons, "＋ 도구 추가",
+                          lambda e=None: add_row()).pack(side="left")
+
+        win.update_idletasks()
+        win.geometry(f"+{self.root.winfo_x() - 60}+{self.root.winfo_y() + 60}")
+        win.grab_set()
+
+    def _pick_tool_path(self, entry):
+        from tkinter import filedialog
+        chosen = filedialog.askopenfilename(title="열 프로그램·파일 고르기")
+        if chosen:
+            entry.delete(0, "end")
+            entry.insert(0, chosen)
+
+    # ------------------------------------------------------- 결재 전후 비교
+
+    def _toggle_compare(self):
+        self._compare_open = not self._compare_open
+        self.config["compare_open"] = self._compare_open
+        save_config(self.config)
+        self._render_drawers()
+
+    def _build_compare(self):
+        c = self.compare
+        for child in c.winfo_children():
+            child.destroy()
+        tk.Frame(c, bg=RULE, height=1).pack(fill="x", padx=8, pady=(2, 7))
+        tk.Label(c, text="결재 전후 비교", font=self.f_small, bg=PAPER, fg=SOFT,
+                 anchor="w").pack(fill="x", padx=12)
+        tk.Label(c, text=COMPARE_NOTE, font=self.f_small, bg=PAPER, fg=SOFT,
+                 anchor="w", justify="left",
+                 wraplength=290).pack(fill="x", padx=12, pady=(3, 8))
+
+        # 사진 편집의 '자르기' 모양 단추 — 누르면 원래 비교 기능이 실행된다
+        button = tk.Frame(c, bg=CARD, cursor="hand2",
+                          highlightbackground=RULE, highlightthickness=1)
+        button.pack(anchor="w", padx=12, pady=(0, 10))
+        crop = tk.Canvas(button, width=18, height=18, bg=CARD, highlightthickness=0)
+        self._draw_crop(crop, False)
+        crop.pack(side="left", padx=(8, 5), pady=5)
+        text = tk.Label(button, text="비교 시작", font=self.f_small, bg=CARD, fg=INK)
+        text.pack(side="left", padx=(0, 10))
+        for w in (button, crop, text):
+            w.bind("<Button-1>", lambda e: self.compare_screens())
+            w.bind("<Enter>", lambda e: (button.config(highlightbackground=INK),
+                                         self._draw_crop(crop, True)))
+            w.bind("<Leave>", lambda e: (button.config(highlightbackground=RULE),
+                                         self._draw_crop(crop, False)))
 
     def _paint_folder(self, hover: bool | None = None):
         """폴더 위치를 라운드 박스에 그린다. 눌러서 열 수 있다는 뜻으로,
@@ -835,7 +1129,7 @@ class Widget:
         else:
             self.shell.pack(fill="both", expand=True)
             self.btn_fold.config(text="—")
-            self._render_quick()
+            self._render_drawers()
             self._draw_opacity_slider()
             self._fit_height()
 
@@ -1236,6 +1530,110 @@ def _round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kw):
         x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
     ]
     return canvas.create_polygon(points, smooth=True, **kw)
+
+
+def _hex_rgb(color: str) -> tuple[int, int, int]:
+    h = color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _win_file_icon(master, path: str, px: int, bg: str):
+    """윈도우 셸에서 파일·폴더의 아이콘을 얻어 tk.PhotoImage 로 돌려준다.
+
+    셸이 주는 것은 HICON 이라 바로 못 쓴다. 32비트 DIB 에 배경색을 깔고
+    그 위에 아이콘을 그린 뒤 픽셀을 읽어, px 칸에 맞게 최근접 축소하며
+    tk 이미지를 만든다. Pillow 없이 표준 라이브러리만으로 한다.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    shell32 = ctypes.windll.shell32
+
+    class SHFILEINFOW(ctypes.Structure):
+        _fields_ = [("hIcon", wintypes.HICON), ("iIcon", ctypes.c_int),
+                    ("dwAttributes", wintypes.DWORD),
+                    ("szDisplayName", wintypes.WCHAR * 260),
+                    ("szTypeName", wintypes.WCHAR * 80)]
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                    ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD)]
+
+    for fn in (user32.GetDC, gdi32.CreateCompatibleDC, gdi32.CreateDIBSection,
+               gdi32.CreateSolidBrush, gdi32.SelectObject, shell32.SHGetFileInfoW):
+        fn.restype = ctypes.c_void_p
+    user32.GetDC.argtypes = [ctypes.c_void_p]
+    user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    gdi32.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+    gdi32.CreateSolidBrush.argtypes = [wintypes.COLORREF]
+    gdi32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+    gdi32.DeleteDC.argtypes = [ctypes.c_void_p]
+    gdi32.GdiFlush.argtypes = []
+    user32.DestroyIcon.argtypes = [ctypes.c_void_p]
+    user32.DrawIconEx.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                  ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                  ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+    user32.FillRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    gdi32.CreateDIBSection.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
+                                       ctypes.POINTER(ctypes.c_void_p),
+                                       ctypes.c_void_p, ctypes.c_uint]
+    shell32.SHGetFileInfoW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32,
+                                       ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint]
+
+    SHGFI_ICON = 0x00000100
+    SHGFI_LARGEICON = 0x00000000
+    info = SHFILEINFOW()
+    if not shell32.SHGetFileInfoW(path, 0, ctypes.byref(info),
+                                  ctypes.sizeof(info), SHGFI_ICON | SHGFI_LARGEICON):
+        return None
+    hicon = info.hIcon
+    if not hicon:
+        return None
+
+    n = 32                                       # 큰 아이콘 기본 크기
+    screen = user32.GetDC(None)
+    memdc = gdi32.CreateCompatibleDC(screen)
+    header = BITMAPINFOHEADER()
+    header.biSize = ctypes.sizeof(header)
+    header.biWidth, header.biHeight = n, -n       # 음수 = 위에서 아래로
+    header.biPlanes, header.biBitCount = 1, 32
+    bits = ctypes.c_void_p()
+    dib = gdi32.CreateDIBSection(memdc, ctypes.byref(header), 0,
+                                 ctypes.byref(bits), None, 0)
+    old = gdi32.SelectObject(memdc, dib)
+    try:
+        r, g, b = _hex_rgb(bg)
+        brush = gdi32.CreateSolidBrush(r | (g << 8) | (b << 16))
+        user32.FillRect(memdc, ctypes.byref(wintypes.RECT(0, 0, n, n)), brush)
+        gdi32.DeleteObject(brush)
+        user32.DrawIconEx(memdc, 0, 0, hicon, n, n, 0, None, 0x0003)   # DI_NORMAL
+        gdi32.GdiFlush()
+        raw = ctypes.string_at(bits, n * n * 4)   # BGRA, 위에서 아래로
+    finally:
+        user32.DestroyIcon(hicon)
+        gdi32.SelectObject(memdc, old)
+        gdi32.DeleteObject(dib)
+        gdi32.DeleteDC(memdc)
+        user32.ReleaseDC(None, screen)
+
+    rows = []
+    for y in range(px):
+        sy = y * n // px
+        row = []
+        for x in range(px):
+            i = (sy * n + x * n // px) * 4
+            row.append("#%02x%02x%02x" % (raw[i + 2], raw[i + 1], raw[i]))
+        rows.append("{" + " ".join(row) + "}")
+    image = tk.PhotoImage(master=master, width=px, height=px)
+    image.put(" ".join(rows))
+    return image
 
 
 def first_run_guide(folder: Path) -> None:
