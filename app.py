@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -41,7 +41,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -349,11 +349,17 @@ def build_ics(docs: list[dict]) -> str:
         "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//gongmun//KR",
         "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "X-WR-CALNAME:공문 일정",
     ]
-    stamp = datetime.now().strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     for doc in docs:
         when = doc.get("deadline") or doc.get("event_date")
         if not when:
             continue
+        try:
+            start = date.fromisoformat(when[:10])
+        except ValueError:
+            continue
+        # 종일 일정은 DTEND(다음 날)가 없으면 구글 캘린더가 조용히 무시한다.
+        end = start + timedelta(days=1)
         prefix = "[마감] " if doc.get("deadline") else "[일정] "
         summary = _ics_escape(prefix + (doc.get("title") or doc["filename"]))[:180]
         detail = _ics_escape((doc.get("summary") or "")[:300])
@@ -361,13 +367,15 @@ def build_ics(docs: list[dict]) -> str:
             "BEGIN:VEVENT",
             f"UID:{doc['id']}@gongmun",
             f"DTSTAMP:{stamp}",
-            f"DTSTART;VALUE=DATE:{when.replace('-', '')}",
+            f"DTSTART;VALUE=DATE:{start.strftime('%Y%m%d')}",
+            f"DTEND;VALUE=DATE:{end.strftime('%Y%m%d')}",
             _ics_fold(f"SUMMARY:{summary}"),
             _ics_fold(f"DESCRIPTION:{detail}"),
             "END:VEVENT",
         ]
     lines.append("END:VCALENDAR")
-    return "\r\n".join(lines)
+    # RFC 5545: 마지막 줄도 CRLF 로 끝나야 한다.
+    return "\r\n".join(lines) + "\r\n"
 
 
 # ---------------------------------------------------------------- 서버
@@ -506,8 +514,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/calendar.ics":
             docs = [d for d in self.store.all_docs() if not d["done"]]
             body = build_ics(docs).encode("utf-8")
+            name = "gongmun-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".ics"
             return self._send(200, body, "text/calendar; charset=utf-8",
-                              {"Content-Disposition": 'attachment; filename="gongmun.ics"'})
+                              {"Content-Disposition": f'attachment; filename="{name}"'})
 
         return self._send(404, b"not found", "text/plain; charset=utf-8")
 
