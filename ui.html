@@ -293,7 +293,6 @@
     <button class="tool" id="deep">전체 재분석</button>
     <button class="tool" id="tidy">폴더 정리</button>
     <button class="tool" id="archive">완료된 업무 정리</button>
-    <button class="tool" id="ics">일정 내보내기</button>
     <button class="tool" id="setfolder">폴더 바꾸기</button>
   </div>
 </header>
@@ -511,17 +510,23 @@ function renderList(){
   _bindPickedBar();
 }
 
+// 캘린더에 넣을 수 있는 날짜(기한/행사일)가 있는가.
+function hasCalendarDate(d){ return !!(d.deadline || d.event_date); }
+
 function _pickedBar(){
   const picked = state.docs.filter(d => chosen.has(d.id));
   if (!picked.length) return "";
   const allDone = picked.every(d => d.done);
+  const datedCount = picked.filter(hasCalendarDate).length;
   const onScreen = visible();
   const allPicked = onScreen.length > 0 && onScreen.every(d => chosen.has(d.id));
   const more = allPicked ? "" : `<button id="bulkall">모두 고르기</button>`;
+  const ics = datedCount ? `<button id="bulkics">일정 내보내기</button>` : "";
   return `<div class="picked">
     <b>${picked.length}건</b> 골랐습니다
     <span class="act">
       <button class="go" id="bulkdone">${allDone ? "처리 취소" : "처리 완료"}</button>
+      ${ics}
       ${more}
       <button id="bulkclear">해제</button>
     </span></div>`;
@@ -544,6 +549,35 @@ function _bindPickedBar(){
   $("bulkclear").onclick = () => { chosen.clear(); render(); };
   const all = $("bulkall");
   if (all) all.onclick = () => { visible().forEach(d => chosen.add(d.id)); render(); };
+  const ics = $("bulkics");
+  if (ics) ics.onclick = exportPickedIcs;
+}
+
+// 고른 공문 가운데 날짜가 있는 것만 캘린더 파일로 내보낸다. 진행 중인
+// 것만 대상이며, 파일에는 공문 제목과 요약이 그대로 담긴다.
+function exportPickedIcs(){
+  const picked = state.docs.filter(d => chosen.has(d.id) && !d.done && hasCalendarDate(d));
+  if (!picked.length){
+    toast("고른 것 중에 캘린더에 넣을 날짜가 있는 진행 중 공문이 없습니다.");
+    return;
+  }
+  const ok = confirm(
+    `고른 공문 ${picked.length}건을 캘린더 파일(.ics)로 내보냅니다.\n` +
+    `\n` +
+    `⚠ 민감한 정보가 포함된 내용은 반드시 제외하세요.\n` +
+    `공문 제목과 요약이 파일에 그대로 담깁니다. 이 파일을 구글 캘린더\n` +
+    `같은 외부 서비스에 올리면 그 내용이 그대로 전송되며, 민감한 정보\n` +
+    `업로드로 생기는 책임은 전적으로 사용자에게 있습니다.\n` +
+    `\n` +
+    `같은 파일을 같은 달력에 다시 가져오면 새 일정이 생기지 않고 기존\n` +
+    `일정이 갱신됩니다. 여러 달력에 나눠 넣으면 중복될 수 있습니다.\n` +
+    `\n` +
+    `계속할까요?`
+  );
+  if (!ok) return;
+  const ids = picked.map(d => d.id).join(",");
+  location.href = "/api/calendar.ics?ids=" + encodeURIComponent(ids);
+  toast("내려받은 파일을 캘린더에서 가져오세요.");
 }
 
 function row(doc){
@@ -748,7 +782,6 @@ async function scan(force){
 $("rescan").onclick = () => scan(false);
 $("deep").onclick = () => scan(true);
 $("scrim").onclick = closePanel;
-$("ics").onclick = () => { location.href = "/api/calendar.ics"; toast("내려받은 파일을 캘린더에서 가져오세요."); };
 $("tidy").onclick = async () => {
   const preview = await call("/api/organize?preview=1");
   const plan = preview.organized || {};

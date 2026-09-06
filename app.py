@@ -41,7 +41,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.7.4"
+VERSION = "1.7.5"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -364,10 +364,14 @@ def build_ics(docs: list[dict]) -> str:
         # 바뀌어도 따라 갱신되지 않아 오히려 헷갈린다.
         summary = _ics_escape(doc.get("title") or doc["filename"])[:180]
         detail = _ics_escape((doc.get("summary") or "")[:300])
+        # UID 는 파일 내용 해시라 다시 내보내도 같은 값이다. 같은 달력에
+        # 다시 가져오면 새 일정이 아니라 기존 일정을 갱신하게 하려는 것.
         lines += [
             "BEGIN:VEVENT",
             f"UID:{doc['id']}@gongmun",
             f"DTSTAMP:{stamp}",
+            f"LAST-MODIFIED:{stamp}",
+            "SEQUENCE:0",
             f"DTSTART;VALUE=DATE:{start.strftime('%Y%m%d')}",
             f"DTEND;VALUE=DATE:{end.strftime('%Y%m%d')}",
             _ics_fold(f"SUMMARY:{summary}"),
@@ -513,7 +517,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True})
 
         if route == "/api/calendar.ics":
-            docs = [d for d in self.store.all_docs() if not d["done"]]
+            # 목록과 같은 묶음 단위로 내보낸다 (첨부에만 기한이 있어도 잡힌다).
+            docs = [d for d in fold_groups(self.store.all_docs()) if not d["done"]]
+            # 브라우저에서 고른 공문만 담는다. ids 가 없으면 안 담는다 —
+            # 이제 내보내기는 반드시 골라서 하도록 바뀌었다.
+            keep = {x for x in query.get("ids", [""])[0].split(",") if x}
+            docs = [d for d in docs if d["id"] in keep]
             body = build_ics(docs).encode("utf-8")
             name = "gongmun-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".ics"
             return self._send(200, body, "text/calendar; charset=utf-8",
