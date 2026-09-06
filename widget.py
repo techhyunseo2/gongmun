@@ -27,9 +27,10 @@ from tkinter import font as tkfont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app import (DB_PATH, PORT, VERSION, Handler, ask_to_surface, fold_groups,  # noqa: E402
-                 load_config, open_in_os, raise_running_widget, resolve_folder,
-                 resolve_inbox, running_port, save_config, start_server)
+from app import (BASE_DIR, DB_PATH, PORT, VERSION, Handler, ask_to_surface,  # noqa: E402
+                 fold_groups, load_config, open_in_os, raise_running_widget,
+                 resolve_folder, resolve_inbox, running_port, save_config,
+                 start_server)
 from classify import CATEGORIES, days_left  # noqa: E402
 from store import Store  # noqa: E402
 import changelog  # noqa: E402
@@ -75,9 +76,11 @@ class Widget:
         self.root.attributes("-alpha", clamp_opacity(self.config.get("opacity", 0.96)))
 
         self._pick_fonts()
+        self._set_window_icon()
         self._build()
         self._place()
         self._bind()
+        self._claim_taskbar_button()
 
         self.refresh(scan=True)
         self._tick()
@@ -205,6 +208,62 @@ class Widget:
         self.x, self.y = int(x), int(y)
         self.root.geometry(f"{WIDTH}x300+{self.x}+{self.y}")
 
+    def _set_window_icon(self):
+        """작업 표시줄과 Alt+Tab 에 뜰 아이콘을 건다."""
+        icon = BASE_DIR / "icon.ico"
+        if not icon.exists():
+            return
+        try:
+            self.root.iconbitmap(default=str(icon))
+        except tk.TclError:
+            pass
+
+    def _claim_taskbar_button(self):
+        """테두리 없는 창이라도 작업 표시줄에 아이콘이 뜨게 한다.
+
+        윈도우는 팝업 창을 작업 표시줄에서 빼는데, 확장 스타일에
+        WS_EX_APPWINDOW 를 걸어 두면 도로 넣어 준다. 작업 표시줄은 창이
+        새로 보일 때만 다시 살피므로, 스타일을 바꾼 뒤 잠깐 숨겼다 띄운다.
+
+        이 아이콘이 있으면 바탕화면 보기로 가려지거나 다른 창에 묻혀도
+        작업 표시줄이나 Alt+Tab 으로 곧바로 되부를 수 있다. 밖에서 창을
+        직접 세우는 기존 방법(`raise_running_widget`)은 그대로 둔다 —
+        아주 오래된 판을 되살릴 때 쓰인다.
+        """
+        if sys.platform != "win32":
+            return
+        try:
+            user32 = ctypes.windll.user32
+            GWL_EXSTYLE = -20
+            WS_EX_APPWINDOW = 0x00040000
+            WS_EX_TOOLWINDOW = 0x00000080
+            get_long = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+            set_long = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+            for fn in (get_long, user32.GetParent):
+                fn.restype = ctypes.c_void_p
+            get_long.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            set_long.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+            user32.GetParent.argtypes = [ctypes.c_void_p]
+
+            hwnd = user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+            style = get_long(hwnd, GWL_EXSTYLE) or 0
+            set_long(hwnd, GWL_EXSTYLE,
+                     (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW)
+        except Exception:  # noqa: BLE001 — 아이콘이 안 떠도 위젯은 돌아야 한다
+            return
+        # 작업 표시줄이 바뀐 스타일을 알아채도록 한 번 숨겼다 띄운다
+        self.root.withdraw()
+        self.root.after(12, self._finish_taskbar_button)
+
+    def _finish_taskbar_button(self):
+        try:
+            self.root.deiconify()
+            self.root.overrideredirect(True)
+            self.root.attributes("-topmost", bool(self.config.get("on_top", True)))
+            self.root.attributes("-alpha", clamp_opacity(self.config.get("opacity", 0.96)))
+        except tk.TclError:
+            pass
+
     def _fit_height(self):
         """내용을 다 그린 뒤 실제 필요한 높이로 창을 맞춘다."""
         if self.collapsed:
@@ -290,7 +349,8 @@ class Widget:
         # 매번 행을 지웠다 다시 만들면 창 높이가 튀고 눈에 거슬리기 때문이다.
         signature = (today, text, len(docs), bool(everything),
                      tuple((d["id"], d["left"], d["category"], d.get("event_date"),
-                            d["title"] or d["filename"]) for d in docs[:ROWS]))
+                            bool(d.get("pinned")), d["title"] or d["filename"])
+                           for d in docs[:ROWS]))
         if signature == self._drawn:
             return
         self._drawn = signature
@@ -341,6 +401,8 @@ class Widget:
         top = tk.Frame(inner, bg=CARD)
         top.pack(fill="x")
         tk.Label(top, text=badge, font=self.f_dday, bg=CARD, fg=color, width=5, anchor="w").pack(side="left")
+        if doc.get("pinned"):
+            tk.Label(top, text="고정", font=self.f_small, bg=CARD, fg=SEAL).pack(side="left")
         tk.Label(top, text=CATEGORIES[doc["category"]], font=self.f_small,
                  bg=CARD, fg=SOFT).pack(side="right")
 
@@ -350,7 +412,22 @@ class Widget:
 
         for target in (frame, inner, top) + tuple(inner.winfo_children()) + tuple(top.winfo_children()):
             target.bind("<Button-1>", self.open_browser)
+            target.bind("<Button-3>", lambda e, d=doc: self._row_menu(e, d))
             target.configure(cursor="hand2")
+
+    def _row_menu(self, event, doc):
+        """행에서 오른쪽 버튼 — 중요한 공문을 맨 위에 고정하거나 푼다."""
+        pinned = bool(doc.get("pinned"))
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="고정 해제" if pinned else "맨 위에 고정",
+                         command=lambda: self._set_pinned(doc, not pinned))
+        menu.tk_popup(event.x_root, event.y_root)
+        return "break"          # 창 전체에 걸린 설정 메뉴가 뒤이어 뜨지 않게 한다
+
+    def _set_pinned(self, doc, pinned: bool):
+        for member in doc.get("members") or [{"id": doc["id"]}]:
+            self.store.set_pinned(member["id"], pinned)
+        self.redraw()
 
     # ------------------------------------------------------------- 동작
 
@@ -797,12 +874,13 @@ def clamp_opacity(value) -> float:
 
 
 def _widget_sort(doc: dict):
-    """기한이 있는 것 먼저, 그 다음 날짜만 있는 것, 마지막이 날짜 없는 것."""
+    """고정한 것이 맨 위, 그 안에서 기한 있는 것 먼저, 날짜만 있는 것, 날짜 없는 것."""
+    pin = 0 if doc.get("pinned") else 1
     if doc["left"] is not None:
-        return (0, doc["left"], "")
+        return (pin, 0, doc["left"], "")
     if doc.get("event_date"):
-        return (1, 0, doc["event_date"])
-    return (2, 0, "")
+        return (pin, 1, 0, doc["event_date"])
+    return (pin, 2, 0, "")
 
 
 def _shorten(text: str, limit: int) -> str:

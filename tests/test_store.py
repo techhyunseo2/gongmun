@@ -98,6 +98,20 @@ class Revision(StoreCase):
         self.assertGreater(self.store.rev, before)
 
 
+class Pinning(StoreCase):
+
+    def test_pin_survives_a_rescan(self):
+        """중요 표시는 파일을 다시 훑어도 남아 있어야 한다."""
+        self._put("가.txt")
+        self.store.scan(self.inbox)
+        doc_id = self.store.all_docs()[0]["id"]
+        self.store.set_pinned(doc_id, True)
+        self.store.scan(self.inbox, force=True)
+        self.assertTrue(self.store.all_docs()[0]["pinned"])
+        self.store.set_pinned(doc_id, False)
+        self.assertFalse(self.store.all_docs()[0]["pinned"])
+
+
 class Concurrency(StoreCase):
 
     def test_scan_read_write_together(self):

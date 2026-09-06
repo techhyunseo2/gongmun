@@ -61,3 +61,30 @@ Filename: "{app}\{#AppExe}"; Description: "지금 실행하기"; Flags: nowait p
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userstartup}\{#AppName}.lnk"
+; 프로그램 안 "컴퓨터 켤 때 자동 실행" 으로 만든 바로가기는 이름에 띄어쓰기가
+; 없다(widget.py 의 set_startup). 설치할 때 만든 것과 파일명이 달라 따로 지운다.
+Type: files; Name: "{userstartup}\공문정리함.lnk"
+Type: files; Name: "{userstartup}\공문정리함.bat"
+
+[Code]
+procedure CurUninstallStepChanged(CurStep: TUninstallStep);
+var
+  DataDir: String;
+begin
+  { 설정과 처리 기록은 .gongmun 폴더에 있다(app.py 의 HOME_DIR). 프로그램만
+    지우고 기록은 남기고 싶은 분이 많으므로, 지울지 물어보고 기본은 "아니오".
+    조용히 지우는 중(/SILENT)이면 묻지 않고 그대로 둔다. }
+  if CurStep = usPostUninstall then
+  begin
+    if UninstallSilent then
+      Exit;
+    DataDir := ExpandConstant('{%USERPROFILE%}\.gongmun');
+    if DirExists(DataDir) then
+      if MsgBox('공문 정리함이 저장한 설정과 처리 기록도 지울까요?' + #13#10 + #13#10 +
+                '지우면 폴더 위치, 그동안의 처리 상태와 메모가 사라집니다.' + #13#10 +
+                '프로그램만 지우려면 "아니오" 를 누르세요.' + #13#10 + #13#10 +
+                DataDir,
+                mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+        DelTree(DataDir, True, True, True);
+  end;
+end;

@@ -176,6 +176,48 @@ class BringingItBack(unittest.TestCase):
         self.assertIn("Handler.show_calls", watch)
         self.assertIn("self.root.after(", watch)
 
+    def test_the_taskbar_button_is_claimed_but_the_old_ways_stay(self):
+        """작업 표시줄 아이콘은 되살리는 길을 하나 더 늘리는 것이지,
+
+        밖에서 창을 직접 세우는 기존 길(아주 오래된 판에도 듣는다)을
+        치우는 게 아니다. 둘 다 있어야 한다.
+        """
+        source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        claim = source[source.index("def _claim_taskbar_button"):]
+        claim = claim[:claim.index("\n    def _finish_taskbar_button")]
+        self.assertIn("WS_EX_APPWINDOW", claim, "팝업 창은 이 스타일 없이는 안 뜬다")
+        self.assertIn("withdraw", claim, "작업 표시줄은 다시 보일 때만 살핀다")
+        self.assertIn("sys.platform != \"win32\"", claim, "다른 OS 에서 터지면 안 된다")
+        # 되살리기 다른 길은 그대로 있어야 한다
+        self.assertIn("raise_running_widget", source)
+        self.assertIn("_say_it_is_already_running", source)
+        # 숨겼다 띄운 뒤 테두리 없애기를 다시 걸어야 한다
+        finish = source[source.index("def _finish_taskbar_button"):]
+        finish = finish[:finish.index("\n    def ", 10)]
+        self.assertIn("overrideredirect(True)", finish)
+
+    def test_uninstaller_removes_the_startup_shortcut_the_app_makes(self):
+        """프로그램 안에서 만든 자동 실행 바로가기를 지울 때도 치워야 한다.
+
+        설치할 때 만드는 것(이름에 띄어쓰기 있음)과 프로그램 메뉴로 만드는
+        것(띄어쓰기 없음)의 파일명이 달라, 하나만 지우면 죽은 바로가기가
+        시작 폴더에 남는다.
+        """
+        iss = (ROOT / "installer.iss").read_text(encoding="utf-8")
+        source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        for name in ("공문정리함.lnk", "공문정리함.bat"):
+            with self.subTest(name=name):
+                self.assertIn(name, source, "set_startup 가 만드는 이름이 바뀌었습니다")
+                self.assertIn(name, iss,
+                              f"installer.iss 의 [UninstallDelete] 에 {name} 을 넣어 주세요")
+
+    def test_uninstaller_asks_before_deleting_records(self):
+        """설정·기록(.gongmun)은 물어보고, 기본은 남기는 쪽이어야 한다."""
+        iss = (ROOT / "installer.iss").read_text(encoding="utf-8")
+        self.assertIn(".gongmun", iss)
+        self.assertIn("MB_DEFBUTTON2", iss, "기본 단추가 '아니오' 여야 실수로 안 지운다")
+        self.assertIn("UninstallSilent", iss, "조용히 지울 때는 묻지 말고 남겨야 한다")
+
     def test_it_respects_the_always_on_top_setting(self):
         """잠깐 맨 위로 올리되, 꺼 두신 분에게는 되돌려 놓아야 한다."""
         source = (ROOT / "widget.py").read_text(encoding="utf-8")

@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS docs (
     archived        TEXT DEFAULT '',
     deadline_edited INTEGER DEFAULT 0,
     readable        INTEGER DEFAULT 1,
+    pinned          INTEGER DEFAULT 0,
     done            INTEGER DEFAULT 0,
     memo            TEXT DEFAULT '',
     error           TEXT DEFAULT ''
@@ -98,7 +99,8 @@ class Store:
                                    ("receipt_number", "TEXT DEFAULT ''"),
                                    ("archived", "TEXT DEFAULT ''"),
                                    ("deadline_edited", "INTEGER DEFAULT 0"),
-                                   ("readable", "INTEGER DEFAULT 1")):
+                                   ("readable", "INTEGER DEFAULT 1"),
+                                   ("pinned", "INTEGER DEFAULT 0")):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {definition}")
 
@@ -248,6 +250,7 @@ class Store:
         data = dict(row)
         data["all_dates"] = json.loads(data.get("all_dates") or "[]")
         data["done"] = bool(data["done"])
+        data["pinned"] = bool(data.get("pinned", 0))
         data["readable"] = bool(data.get("readable", 1))
         data["category"] = data["category_manual"] or data["category"]
         data["edited"] = bool(data["category_manual"])
@@ -267,6 +270,10 @@ class Store:
 
     def set_done(self, doc_id: str, done: bool) -> None:
         self._write("UPDATE docs SET done=? WHERE id=?", (1 if done else 0, doc_id))
+
+    def set_pinned(self, doc_id: str, pinned: bool) -> None:
+        """중요한 공문을 목록 맨 위에 붙여 둔다."""
+        self._write("UPDATE docs SET pinned=? WHERE id=?", (1 if pinned else 0, doc_id))
 
     def set_category(self, doc_id: str, category: str) -> None:
         self._write("UPDATE docs SET category_manual=? WHERE id=?", (category, doc_id))

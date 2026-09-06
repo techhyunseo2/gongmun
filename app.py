@@ -41,7 +41,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 DB_PATH = HOME_DIR / "docs.db"
 # 버전을 올리고 커밋하면 GitHub이 알아서 새 릴리스를 만든다.
 # 이미 깔려 있는 프로그램들은 그 릴리스를 보고 스스로 갱신한다.
-VERSION = "1.6.7"
+VERSION = "1.7.0"
 
 # 업데이트를 받아 올 저장소. "사용자이름/저장소이름" 형태로 적는다.
 # 공개 저장소여야 한다. 비공개면 받는 쪽에서 접근하지 못한다.
@@ -522,6 +522,10 @@ class Handler(BaseHTTPRequestHandler):
             done = bool(payload.get("done"))
             for member in payload.get("members") or [doc_id]:
                 self.store.set_done(member, done)
+        elif route == "/api/pin":
+            pinned = bool(payload.get("pinned"))
+            for member in payload.get("members") or [doc_id]:
+                self.store.set_pinned(member, pinned)
         elif route == "/api/category":
             category = payload.get("category")
             if category not in CATEGORIES:
@@ -663,6 +667,8 @@ def fold_groups(docs: list[dict]) -> list[dict]:
         entry["event_date"] = events[0] if events else None
         entry["all_dates"] = sorted({d for m in members for d in (m.get("all_dates") or [])})
         entry["done"] = all(m["done"] for m in members)
+        # 묶음 안의 어느 문서든 고정돼 있으면 묶음 전체를 고정으로 본다.
+        entry["pinned"] = any(m.get("pinned") for m in members)
         folded.append(entry)
     return folded
 
@@ -697,7 +703,9 @@ def _month_of(group: dict) -> int | None:
 
 
 def _sort_key(doc: dict):
-    """마감 임박한 것부터, 마감 없는 것은 파일 날짜 최신순."""
+    """고정한 것이 맨 위, 그다음 마감 임박한 것부터, 마감 없는 것은 파일 날짜 최신순."""
+    if doc.get("pinned") and not doc["done"]:
+        return (-1, 0, doc["title"] or "")
     if doc["done"]:
         return (2, 0, "")
     if doc["days_left"] is not None:

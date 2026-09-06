@@ -459,8 +459,10 @@ function renderList(){
   }
 
   const buckets = new Map(BANDS.map(b => [b.key, []]));
+  const pinned = [];
   const done = [];
   for (const doc of docs){
+    if (doc.pinned && !doc.done){ pinned.push(doc); continue; }
     if (doc.done){ done.push(doc); continue; }
     for (const band of BANDS){
       if (band.test(doc)){ buckets.get(band.key).push(doc); break; }
@@ -468,6 +470,12 @@ function renderList(){
   }
 
   let html = _pickedBar();
+  if (pinned.length){
+    const allPicked = pinned.every(d => chosen.has(d.id));
+    html += `<div class="band"><span class="band-name">📌 고정</span><span class="band-line"></span>
+      <button class="bandpick" data-band="pinned">${allPicked ? "고르기 해제" : "이 구간 모두"}</button></div>`;
+    html += pinned.map(row).join("");
+  }
   for (const band of BANDS){
     const group = buckets.get(band.key);
     if (!group.length) continue;
@@ -493,7 +501,9 @@ function renderList(){
   });
   list.querySelectorAll(".bandpick").forEach(el => el.onclick = () => {
     const band = BANDS.find(b => b.key === el.dataset.band);
-    const members = el.dataset.band === "done" ? done : buckets.get(band.key);
+    const members = el.dataset.band === "done" ? done
+                  : el.dataset.band === "pinned" ? pinned
+                  : buckets.get(band.key);
     const allPicked = members.every(d => chosen.has(d.id));
     members.forEach(d => allPicked ? chosen.delete(d.id) : chosen.add(d.id));
     render();
@@ -549,6 +559,7 @@ function row(doc){
   const meta = [doc.sender, doc.receipt_number || _shortFile(doc)]
     .filter(Boolean).join(" · ");
   const low = doc.confidence === "낮음" && !doc.edited ? `<span class="flag">확인 필요</span>` : "";
+  const pin = doc.pinned ? `<span class="clip">📌 고정</span>` : "";
   const box = doc.archived ? `<span class="clip">${esc(doc.archived)} 보관</span>` : "";
   const clip = doc.attachments ? `<span class="clip">첨부 ${doc.attachments}</span>` : "";
   return `<button class="row ${doc.done?"done":""}" data-id="${doc.id}"
@@ -556,7 +567,7 @@ function row(doc){
     <span class="pick" role="checkbox" aria-checked="${chosen.has(doc.id)}"
       title="고르기"></span>
     <span class="${cls}">${badge}</span>
-    <span><span class="name">${esc(doc.title || doc.filename)}</span>${low}${clip}${box}
+    <span><span class="name">${esc(doc.title || doc.filename)}</span>${pin}${low}${clip}${box}
       <span class="meta">${esc(meta)}</span></span>
     <span class="kind">${cats[doc.category]}</span>
   </button>`;
@@ -657,6 +668,7 @@ async function openPanel(id, fileId){
     <div class="actions">
       <button class="primary" id="openfile">${members.length > 1 ? "보고 있는 파일 열기" : "원본 파일 열기"}</button>
       <button class="ghost" id="openfolder">파일 위치 열기</button>
+      <button class="ghost" id="togglepin">${group.pinned ? "고정 해제" : "맨 위에 고정"}</button>
       <button class="ghost" id="toggledone">${group.done ? "처리 취소" : "처리 완료"}</button>
     </div>`;
 
@@ -698,6 +710,11 @@ async function openPanel(id, fileId){
   $("openfolder").onclick = async () => {
     const res = await call("/api/reveal?id=" + encodeURIComponent(viewingFile || id));
     if (res.error) toast(res.error);
+  };
+  $("togglepin").onclick = async () => {
+    state = await call("/api/pin", {id, pinned:!group.pinned, members:members.map(m => m.id)});
+    toast(group.pinned ? "고정을 해제했습니다." : "목록 맨 위에 고정했습니다.");
+    render(); openPanel(id);
   };
   $("toggledone").onclick = async () => {
     state = await call("/api/done", {id, done:!group.done, members:members.map(m => m.id)});

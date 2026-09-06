@@ -129,6 +129,17 @@ class Routes(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
+    def post(self, path: str, body: dict):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        req = urllib.request.Request(
+            url, data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
     def a_doc(self, suffix: str) -> dict:
         for doc in self.store.all_docs():
             if doc["filename"].endswith(suffix):
@@ -182,6 +193,18 @@ class Routes(unittest.TestCase):
     def test_open_folder_opens_the_inbox(self):
         self.get("/api/open-folder")
         self.assertEqual([str(p) for p in self.opened], [str(self.inbox)])
+
+    def test_pin_marks_the_whole_group_and_sorts_it_first(self):
+        """첨부 하나만 고정해도 공문 묶음이 통째로 맨 위로 올라와야 한다."""
+        zip_doc = self.a_doc(".zip")
+        try:
+            status, state = self.post("/api/pin", {"id": zip_doc["id"], "pinned": True})
+            self.assertEqual(status, 200)
+            self.assertTrue(state["docs"][0]["pinned"])
+        finally:
+            self.post("/api/pin", {"id": zip_doc["id"], "pinned": False})
+        _, state = self.get("/api/state")
+        self.assertFalse(any(d["pinned"] for d in state["docs"]))
 
     def test_state_and_rev_agree(self):
         _, rev = self.get("/api/rev")
