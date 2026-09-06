@@ -43,6 +43,44 @@ class Opacity(unittest.TestCase):
                                 "이보다 흐리면 위젯이 사실상 안 보인다")
 
 
+class QuickBar(unittest.TestCase):
+    """복사한 글 담아 두기 + 자주 쓰는 특수문자 고정."""
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+
+    def test_one_line_flattens_and_trims(self):
+        self.assertEqual(widget._one_line("가\n나  다", 10), "가 나 다")
+        self.assertEqual(widget._one_line("x" * 50, 5), "xxxx…")
+
+    def test_stash_and_glyphs_are_persisted(self):
+        """담아 둔 글과 특수문자 배치는 껐다 켜도 남아야 한다(config.json)."""
+        for key in ('"clips"', '"glyphs"', '"quickbar_open"'):
+            with self.subTest(key=key):
+                self.assertIn(key, self.source)
+        stash = self.source[self.source.index("def _stash_clipboard"):]
+        stash = stash[:stash.index("\n    def ", 10)]
+        self.assertIn("save_config(self.config)", stash)
+        self.assertIn("del clips[CLIP_MAX:]", stash, "오래된 것부터 밀어내야 한다")
+
+    def test_order_can_be_edited(self):
+        """저장한 텍스트와 특수문자의 자리를 바꿀 수 있어야 한다."""
+        move = self.source[self.source.index("def _move_clip"):]
+        move = move[:move.index("\n    def ", 10)]
+        self.assertIn("clips.insert(there, clips.pop(here))", move)
+        # 특수문자는 줄 편집기의 줄 순서가 곧 배치 순서다
+        editor = self.source[self.source.index("def _edit_glyphs"):]
+        editor = editor[:editor.index("\n    def ", 10)]
+        self.assertIn("splitlines()", editor)
+        self.assertIn("줄 순서가 곧 배치 순서", self.source)
+
+    def test_click_copies_to_clipboard(self):
+        copy = self.source[self.source.index("def _copy_text"):]
+        copy = copy[:copy.index("\n    @staticmethod")]
+        self.assertIn("clipboard_clear", copy)
+        self.assertIn("clipboard_append", copy)
+
+
 class Wording(unittest.TestCase):
     """사용자가 직접 정한 문구. 업데이트 때 되돌리지 말 것.
 

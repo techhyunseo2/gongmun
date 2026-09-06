@@ -54,6 +54,8 @@ REFRESH_MINUTES = 10        # 폴더에 새 파일이 들어왔는지 훑는 주
 LIVE_SECONDS = 2.5          # 브라우저에서 고친 게 있는지 보는 주기 (번호만 본다)
 UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시 본다
 OPACITY_MIN = 0.5           # 더 흐려지면 위젯을 찾지 못해 되돌릴 길이 없어진다
+CLIP_MAX = 12               # 담아 둔 글은 이만큼만 두고 오래된 것부터 밀어낸다
+GLYPH_MAX = 40              # 고정해 둘 특수문자·문구 개수 상한
 
 
 class Widget:
@@ -80,6 +82,7 @@ class Widget:
         self._build()
         self._place()
         self._bind()
+        self._render_quick()
         self._claim_taskbar_button()
 
         self.refresh(scan=True)
@@ -118,6 +121,8 @@ class Widget:
         self.btn_close.pack(side="right", padx=(6, 0))
         self.btn_fold = tk.Label(self.head, text="—", font=self.f_head, bg=PAPER, fg=SOFT, cursor="hand2")
         self.btn_fold.pack(side="right")
+        self.btn_quick = tk.Label(self.head, text="▤", font=self.f_head, bg=PAPER, fg=SOFT, cursor="hand2")
+        self.btn_quick.pack(side="right", padx=(0, 6))
 
         self.summary = tk.Label(outer, text="읽는 중", font=self.f_head, bg=PAPER, fg=SOFT, anchor="w")
         self.summary.pack(fill="x", padx=12, pady=(0, 1))
@@ -144,6 +149,203 @@ class Widget:
         self.btn_scan.pack(side="left", padx=(6, 0))
         self.stamp = tk.Label(foot, text="", font=self.f_small, bg=PAPER, fg=SOFT)
         self.stamp.pack(side="right")
+
+        # 빠른 붙여넣기 — 복사한 글을 담아 두고, 자주 쓰는 특수문자를 고정한다.
+        # foot 아래에 서랍처럼 붙는다. 열림 여부는 기억해 둔다.
+        self.quick = tk.Frame(self.body, bg=PAPER)
+        self._quick_open = bool(self.config.get("quickbar_open", False))
+
+    # --------------------------------------------------------- 빠른 붙여넣기
+
+    def _render_quick(self):
+        """열림 상태에 맞춰 서랍을 그리거나 감춘다."""
+        if self._quick_open and not self.collapsed:
+            self._build_quick()
+            self.quick.pack(fill="x")
+        else:
+            self.quick.pack_forget()
+        self.btn_quick.config(fg=INK if self._quick_open else SOFT)
+        self._fit_height()
+
+    def _toggle_quick(self):
+        self._quick_open = not self._quick_open
+        self.config["quickbar_open"] = self._quick_open
+        save_config(self.config)
+        self._render_quick()
+
+    def _build_quick(self):
+        q = self.quick
+        for child in q.winfo_children():
+            child.destroy()
+        tk.Frame(q, bg=RULE, height=1).pack(fill="x", padx=8, pady=(2, 7))
+
+        head = tk.Frame(q, bg=PAPER)
+        head.pack(fill="x", padx=12)
+        tk.Label(head, text="자주 쓰는 문자", font=self.f_small, bg=PAPER,
+                 fg=SOFT).pack(side="left")
+        self._foot_button(head, "편집", lambda e=None: self._edit_glyphs()).pack(side="right")
+
+        glyphs = list(self.config.get("glyphs") or [])
+        grid = tk.Frame(q, bg=PAPER)
+        grid.pack(fill="x", padx=12, pady=(5, 0))
+        if glyphs:
+            for i, text in enumerate(glyphs):
+                cell = tk.Label(grid, text=_one_line(text, 6), font=self.f_row, bg=CARD,
+                                fg=INK, cursor="hand2", padx=7, pady=3,
+                                highlightbackground=RULE, highlightthickness=1)
+                cell.grid(row=i // 6, column=i % 6, padx=(0, 4), pady=2, sticky="w")
+                cell.bind("<Button-1>",
+                          lambda e, t=text, w=cell: self._copy_text(t, w, _one_line(t, 6)))
+                cell.bind("<Enter>", lambda e, w=cell: w.config(highlightbackground=INK))
+                cell.bind("<Leave>", lambda e, w=cell: w.config(highlightbackground=RULE))
+        else:
+            tk.Label(grid, text="편집을 눌러 ○ ※ ℃ 처럼 자주 쓰는 문자를 넣어 두세요",
+                     font=self.f_small, bg=PAPER, fg=SOFT, anchor="w",
+                     wraplength=270, justify="left").pack(fill="x")
+
+        tk.Label(q, text="담아 둔 글", font=self.f_small, bg=PAPER, fg=SOFT,
+                 anchor="w").pack(fill="x", padx=12, pady=(9, 2))
+        clips = list(self.config.get("clips") or [])
+        if clips:
+            box = tk.Frame(q, bg=PAPER)
+            box.pack(fill="x", padx=12)
+            for i, text in enumerate(clips):
+                line = tk.Frame(box, bg=CARD, highlightbackground=RULE, highlightthickness=1)
+                line.pack(fill="x", pady=2)
+                label = tk.Label(line, text=_one_line(text, 30), font=self.f_small, bg=CARD,
+                                 fg=INK, anchor="w", cursor="hand2")
+                label.pack(side="left", fill="x", expand=True, padx=(8, 4), pady=4)
+                label.bind("<Button-1>",
+                           lambda e, t=text, w=label: self._copy_text(t, w, _one_line(t, 30)))
+                drop = tk.Label(line, text="✕", font=self.f_small, bg=CARD, fg=SOFT,
+                                cursor="hand2", padx=7)
+                drop.pack(side="right")
+                drop.bind("<Button-1>", lambda e, t=text: self._forget_clip(t))
+                # 순서를 손으로 바꾼다. 위아래 화살표로 한 칸씩 옮긴다.
+                down = tk.Label(line, text="▾", font=self.f_small, bg=CARD, fg=SOFT,
+                                cursor="hand2", padx=2)
+                down.pack(side="right")
+                down.bind("<Button-1>", lambda e, t=text: self._move_clip(t, 1))
+                up = tk.Label(line, text="▴", font=self.f_small, bg=CARD, fg=SOFT,
+                              cursor="hand2", padx=2)
+                up.pack(side="right")
+                up.bind("<Button-1>", lambda e, t=text: self._move_clip(t, -1))
+        else:
+            tk.Label(q, text="다른 곳에서 복사한 뒤 아래 단추를 누르면 여기 담깁니다",
+                     font=self.f_small, bg=PAPER, fg=SOFT, anchor="w",
+                     wraplength=290, justify="left").pack(fill="x", padx=12)
+
+        bar = tk.Frame(q, bg=PAPER)
+        bar.pack(fill="x", padx=12, pady=(7, 10))
+        self.btn_stash = self._foot_button(bar, "지금 복사한 것 담기",
+                                           lambda e=None: self._stash_clipboard())
+        self.btn_stash.pack(side="left")
+        if clips:
+            self._foot_button(bar, "비우기", lambda e=None: self._clear_clips()).pack(side="right")
+
+    def _copy_text(self, text: str, widget=None, restore: str | None = None):
+        """문자나 담아 둔 글을 클립보드에 넣는다. 붙여넣기는 사용자가 한다.
+
+        위젯이 다른 앱에 직접 글자를 밀어 넣는 것은 창마다 동작이 달라
+        미덥지 않다. 클립보드에 얹어 두는 것이 어디서든 확실하다.
+        """
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update_idletasks()
+        except tk.TclError:
+            return
+        if widget is not None:
+            widget.config(text="복사됨", fg=SEAL)
+            widget.after(900, lambda: self._restore_label(widget, restore))
+
+    @staticmethod
+    def _restore_label(widget, text):
+        try:
+            widget.config(text=text, fg=INK)
+        except tk.TclError:
+            pass
+
+    def _stash_clipboard(self):
+        try:
+            text = self.root.clipboard_get()
+        except tk.TclError:
+            text = ""
+        text = (text or "").strip()
+        if not text:
+            self.btn_stash.config(text="복사한 글이 없습니다")
+            self.btn_stash.after(1300,
+                                 lambda: self.btn_stash.config(text="지금 복사한 것 담기"))
+            return
+        clips = [c for c in (self.config.get("clips") or []) if c != text]
+        clips.insert(0, text)
+        del clips[CLIP_MAX:]
+        self.config["clips"] = clips
+        save_config(self.config)
+        self._render_quick()
+
+    def _forget_clip(self, text: str):
+        clips = [c for c in (self.config.get("clips") or []) if c != text]
+        self.config["clips"] = clips
+        save_config(self.config)
+        self._render_quick()
+
+    def _move_clip(self, text: str, delta: int):
+        """담아 둔 글을 한 칸 위나 아래로 옮긴다."""
+        clips = list(self.config.get("clips") or [])
+        if text not in clips:
+            return
+        here = clips.index(text)
+        there = max(0, min(len(clips) - 1, here + delta))
+        if here == there:
+            return
+        clips.insert(there, clips.pop(here))
+        self.config["clips"] = clips
+        save_config(self.config)
+        self._render_quick()
+
+    def _clear_clips(self):
+        self.config["clips"] = []
+        save_config(self.config)
+        self._render_quick()
+
+    def _edit_glyphs(self):
+        """자주 쓰는 문자를 한 줄에 하나씩 적어 두는 작은 창."""
+        window = tk.Toplevel(self.root)
+        window.title("자주 쓰는 문자")
+        window.configure(bg=PAPER)
+        window.resizable(False, False)
+        window.transient(self.root)
+
+        frame = tk.Frame(window, bg=PAPER)
+        frame.pack(fill="both", expand=True, padx=18, pady=16)
+        tk.Label(frame, text="한 줄에 하나씩 적어 주세요. 한 글자든 짧은 문구든 됩니다.\n"
+                             "줄 순서가 곧 배치 순서입니다. 줄을 잘라 옮기면 자리가 바뀝니다.",
+                 font=self.f_small, bg=PAPER, fg=SOFT, anchor="w",
+                 wraplength=300, justify="left").pack(fill="x", pady=(0, 8))
+        box = tk.Text(frame, height=10, width=30, font=self.f_row, wrap="none",
+                      bg=CARD, fg=INK, relief="flat", highlightthickness=1,
+                      highlightbackground=RULE, padx=8, pady=6)
+        box.insert("1.0", "\n".join(self.config.get("glyphs") or []))
+        box.pack(fill="both")
+
+        def save():
+            lines = [ln.strip() for ln in box.get("1.0", "end").splitlines()]
+            self.config["glyphs"] = [ln for ln in lines if ln][:GLYPH_MAX]
+            save_config(self.config)
+            window.destroy()
+            self._render_quick()
+
+        buttons = tk.Frame(frame, bg=PAPER)
+        buttons.pack(fill="x", pady=(12, 0))
+        self._foot_button(buttons, "저장", lambda e=None: save()).pack(side="right")
+        self._foot_button(buttons, "취소",
+                          lambda e=None: window.destroy()).pack(side="right", padx=(0, 6))
+
+        window.update_idletasks()
+        window.geometry(f"+{self.root.winfo_x() - 40}+{self.root.winfo_y() + 60}")
+        window.grab_set()
+        box.focus_set()
 
     def _paint_folder(self):
         parts = self.folder.parts
@@ -278,12 +480,13 @@ class Widget:
             target.bind("<B1-Motion>", self._drag_move)
             target.bind("<ButtonRelease-1>", self._drag_end)
         for child in self.head.winfo_children():
-            if child not in (self.btn_close, self.btn_fold):
+            if child not in (self.btn_close, self.btn_fold, self.btn_quick):
                 child.bind("<Button-1>", self._drag_start)
                 child.bind("<B1-Motion>", self._drag_move)
                 child.bind("<ButtonRelease-1>", self._drag_end)
         self.btn_close.bind("<Button-1>", lambda e: self.quit())
         self.btn_fold.bind("<Button-1>", lambda e: self.toggle_fold())
+        self.btn_quick.bind("<Button-1>", lambda e: self._toggle_quick())
         self.root.bind("<Button-3>", self._menu)
         self.root.bind("<Escape>", lambda e: self.quit())
 
@@ -443,6 +646,7 @@ class Widget:
         else:
             self.body.pack(fill="both", expand=True)
             self.btn_fold.config(text="—")
+            self._render_quick()
             self._fit_height()
 
     def compare_screens(self):
@@ -488,6 +692,8 @@ class Widget:
         menu.add_command(label="항상 위에 두기 " + ("끄기" if on_top else "켜기"),
                          command=self._toggle_top)
         menu.add_command(label="투명도 조절", command=self.show_opacity)
+        menu.add_command(label="빠른 붙여넣기 " + ("숨기기" if self._quick_open else "보이기"),
+                         command=self._toggle_quick)
         menu.add_separator()
         menu.add_command(label="공문 폴더 확인", command=self.show_folder)
         menu.add_command(label="공문 폴더 열기", command=lambda: open_in_os(self.folder))
@@ -886,6 +1092,12 @@ def _widget_sort(doc: dict):
 def _shorten(text: str, limit: int) -> str:
     text = text.strip()
     return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _one_line(text: str, limit: int) -> str:
+    """여러 줄 글을 한 줄로 눌러 목록에 보이기 좋게 자른다."""
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[:limit - 1] + "…"
 
 
 def _startup_dir() -> Path:
