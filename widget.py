@@ -8,7 +8,7 @@
   python widget.py --folder "경로"   폴더를 지정한다
 
 머리말을 끌면 창이 움직이고, 위치는 다음 실행 때 그대로 복원된다.
-머리말 아이콘으로 항상 위·결재 전후 비교·빠른 붙여넣기를 켜고, 바로
+머리말 아이콘으로 항상 위·결재 전후 비교·커스텀 클립보드를 켜고, 바로
 아래 슬라이더로 투명도를 맞춘다. 오른쪽 버튼에는 업데이트 확인만 남는다.
 """
 
@@ -129,14 +129,14 @@ class Widget:
         self.btn_close.pack(side="right", padx=(6, 0))
         self.btn_fold = self._text_button("—", "접기", self.toggle_fold)
         self.btn_fold.pack(side="right", padx=(2, 0))
-        self.btn_quick = self._icon_button(self._draw_clip, "빠른 붙여넣기",
+        self.btn_quick = self._icon_button(self._draw_clip, "커스텀 클립보드",
                                            self._toggle_quick,
                                            active=bool(self.config.get("quickbar_open", False)))
         self.btn_quick.pack(side="right", padx=(6, 0))
         self.btn_compare = self._icon_button(self._draw_compare, "결재 전후 비교",
                                              self.compare_screens)
         self.btn_compare.pack(side="right", padx=(6, 0))
-        self.btn_top = self._icon_button(self._draw_pin, "항상 위에 두기",
+        self.btn_top = self._icon_button(self._draw_ontop, "항상 위에 두기",
                                          self._toggle_top,
                                          active=bool(self.config.get("on_top", True)))
         self.btn_top.pack(side="right", padx=(6, 0))
@@ -145,22 +145,22 @@ class Widget:
         self.shell = tk.Frame(outer, bg=PAPER)
         self.shell.pack(fill="both", expand=True)
 
+        # 한 줄에: 투명도 슬라이더(절반) + 남은 자리를 폴더 경로 박스가 채운다.
+        # 폴더 박스는 눌러서 경로 확인·열기·바꾸기를 할 수 있고, 칸에 안
+        # 들어가면 말줄임표로 자른다.
         self.opacity_row = tk.Frame(self.shell, bg=PAPER)
-        self.opacity_row.pack(fill="x", padx=12, pady=(3, 3))
+        self.opacity_row.pack(fill="x", padx=12, pady=(3, 5))
         tk.Label(self.opacity_row, text="투명도", font=self.f_small,
-                 bg=PAPER, fg=SOFT).pack(side="left", padx=(0, 8))
-        self.opacity_slider = tk.Canvas(self.opacity_row, height=16, bg=PAPER,
-                                        highlightthickness=0, cursor="hand2")
-        self.opacity_slider.pack(side="left", fill="x", expand=True)
+                 bg=PAPER, fg=SOFT).pack(side="left", padx=(0, 6))
+        # 슬라이더는 작게 두고(대충 맞추는 용도), 남은 폭은 폴더 박스가 쓴다.
+        self.opacity_slider = tk.Canvas(self.opacity_row, height=22, width=40,
+                                        bg=PAPER, highlightthickness=0, cursor="hand2")
+        self.opacity_slider.pack(side="left")
         self._wire_opacity_slider()
 
-        self.summary = tk.Label(self.shell, text="읽는 중", font=self.f_head,
-                                bg=PAPER, fg=SOFT, anchor="w")
-        self.summary.pack(fill="x", padx=12, pady=(0, 1))
-
-        self.folderchip = tk.Canvas(self.shell, height=24, bg=PAPER,
+        self.folderchip = tk.Canvas(self.opacity_row, height=22, bg=PAPER,
                                     highlightthickness=0, cursor="hand2")
-        self.folderchip.pack(fill="x", padx=12, pady=(0, 8))
+        self.folderchip.pack(side="left", fill="x", expand=True, padx=(8, 0))
         self._folder_text = ""
         self._folder_hover = False
         self.folderchip.bind("<Button-1>", lambda e: self.show_folder())
@@ -168,6 +168,11 @@ class Widget:
         self.folderchip.bind("<Leave>", lambda e: self._paint_folder(hover=False))
         self.folderchip.bind("<Configure>", lambda e: self._paint_folder())
         self._paint_folder()
+
+        # "처리할 것 N건" 은 공문 목록 바로 위에 붙인다.
+        self.summary = tk.Label(self.shell, text="읽는 중", font=self.f_head,
+                                bg=PAPER, fg=SOFT, anchor="w")
+        self.summary.pack(fill="x", padx=12, pady=(0, 3))
 
         self.body = tk.Frame(self.shell, bg=PAPER)
         self.body.pack(fill="both", expand=True)
@@ -184,7 +189,7 @@ class Widget:
         self.stamp = tk.Label(foot, text="", font=self.f_small, bg=PAPER, fg=SOFT)
         self.stamp.pack(side="right")
 
-        # 빠른 붙여넣기 — 복사한 글을 담아 두고, 자주 쓰는 특수문자를 고정한다.
+        # 커스텀 클립보드 — 복사한 글을 담아 두고, 자주 쓰는 특수문자를 고정한다.
         # foot 아래에 서랍처럼 붙는다. 열림 여부는 기억해 둔다.
         self.quick = tk.Frame(self.body, bg=PAPER)
         self._quick_open = bool(self.config.get("quickbar_open", False))
@@ -219,14 +224,16 @@ class Widget:
         icon._active = active
         icon._draw(icon, active)
 
-    def _draw_pin(self, c, on):
-        """압정을 정면에서 본 모양. 켜져 있으면 머리를 채운다."""
+    def _draw_ontop(self, c, on):
+        """페이지 여러 장을 겹쳐 놓은 모양. 맨 앞 장이 차 있으면 '맨 앞에
+        고정'(항상 위에 두기 켜짐), 비어 있으면 꺼짐."""
         c.delete("all")
         line = INK if on else SOFT
-        head = SLATE if on else PAPER
-        c.create_oval(4, 2, 14, 8, outline=line, width=1.4, fill=head)   # 머리 원반
-        c.create_polygon(7, 8, 11, 8, 10, 13, 8, 13, fill=line, outline=line)  # 몸통
-        c.create_line(9, 13, 9, 17, fill=line, width=1.6, capstyle="round")   # 바늘
+        for x, y in ((1, 1), (4, 3)):                 # 뒤에 깔린 두 장
+            c.create_rectangle(x, y, x + 9, y + 11, outline=line, width=1.2,
+                               fill=PAPER)
+        c.create_rectangle(7, 6, 16, 17, outline=line, width=1.5,
+                           fill=(SLATE if on else PAPER))   # 맨 앞 장
 
     def _draw_compare(self, c, hover):
         """가운데가 갈린 직사각형. 왼쪽 원본(초록), 오른쪽 수정(빨강)."""
@@ -294,14 +301,16 @@ class Widget:
         s.bind("<Leave>", lambda e: self._tip_cancel())
 
     def _slider_span(self):
-        w = self.opacity_slider.winfo_width() or (WIDTH - 90)
+        w = self.opacity_slider.winfo_width()
+        if w <= 10:                       # 아직 배치 전이면 지정 폭을 쓴다
+            w = int(self.opacity_slider["width"])
         return 8, max(9, w - 8)          # 조작점 반지름만큼 안쪽으로
 
     def _draw_opacity_slider(self):
         s = self.opacity_slider
         s.delete("all")
         left, right = self._slider_span()
-        mid = 8
+        mid = (int(s["height"]) or 22) // 2
         value = clamp_opacity(self.config.get("opacity", 0.96))
         frac = (value - OPACITY_MIN) / (1.0 - OPACITY_MIN)
         knob = left + frac * (right - left)
@@ -320,7 +329,7 @@ class Widget:
             self.config["opacity"] = clamp_opacity(value)   # 슬라이더가 따라오도록
         self._draw_opacity_slider()
 
-    # --------------------------------------------------------- 빠른 붙여넣기
+    # ------------------------------------------------------- 커스텀 클립보드
 
     def _render_quick(self):
         """열림 상태에 맞춰 서랍을 그리거나 감춘다."""
@@ -519,14 +528,17 @@ class Widget:
             self._folder_hover = hover
         parts = self.folder.parts
         short = " › ".join(parts[-2:]) if len(parts) >= 2 else str(self.folder)
-        self._folder_text = "폴더  " + _shorten(short, 32)
 
         c = self.folderchip
         c.delete("all")
-        w = c.winfo_width() or (WIDTH - 26)
+        w = c.winfo_width()
+        if w <= 10:                       # 배치 전
+            w = WIDTH - 24 - 34 - 6 - 40 - 8
         fill = GLOW if self._folder_hover else CARD
         outline = SOFT if self._folder_hover else RULE
-        _round_rect(c, 1, 1, w - 2, 22, 8, fill=fill, outline=outline, width=1)
+        _round_rect(c, 1, 1, w - 2, 21, 8, fill=fill, outline=outline, width=1)
+        # 칸 폭에 맞춰 실제 픽셀로 재서 넘치면 말줄임표로 자른다
+        self._folder_text = _fit_text("폴더  " + short, self.f_small, w - 22)
         c.create_text(11, 11, text=self._folder_text, anchor="w",
                       font=self.f_small, fill=INK)
 
@@ -568,9 +580,9 @@ class Widget:
         window.geometry(f"+{x}+{y}")
         window.grab_set()
 
-    def _foot_button(self, parent, text, command):
+    def _foot_button(self, parent, text, command, padx=9):
         label = tk.Label(parent, text=text, font=self.f_small, bg=CARD, fg=INK,
-                         padx=9, pady=4, cursor="hand2",
+                         padx=padx, pady=4, cursor="hand2",
                          highlightbackground=RULE, highlightthickness=1)
         label.bind("<Button-1>", command)
         label.bind("<Enter>", lambda e: label.config(highlightbackground=INK))
@@ -1196,6 +1208,24 @@ def _one_line(text: str, limit: int) -> str:
     """여러 줄 글을 한 줄로 눌러 목록에 보이기 좋게 자른다."""
     flat = " ".join(str(text).split())
     return flat if len(flat) <= limit else flat[:limit - 1] + "…"
+
+
+def _fit_text(text: str, font, max_px: int) -> str:
+    """실제 픽셀 폭으로 재서 max_px 를 넘으면 뒤를 잘라 … 를 붙인다.
+
+    글자 수로 자르면 한글·영문이 섞였을 때 어떤 폴더는 남고 어떤 폴더는
+    잘려 들쭉날쭉하다. 폭으로 재야 칸에 맞게 일정하게 정리된다.
+    """
+    if max_px <= 0 or font.measure(text) <= max_px:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if font.measure(text[:mid] + "…") <= max_px:
+            lo = mid
+        else:
+            hi = mid - 1
+    return (text[:lo].rstrip() + "…") if lo else "…"
 
 
 def _round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kw):

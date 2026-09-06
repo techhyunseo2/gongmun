@@ -133,7 +133,7 @@ class Menu(unittest.TestCase):
         self.assertIn("업데이트 확인", block)
         self.assertIn("버전 {VERSION}", block)
         for gone in ("항상 위에 두기", "공문 폴더", "결재 전후 비교",
-                     "자동 실행", "전체 화면 열기", "빠른 붙여넣기"):
+                     "자동 실행", "전체 화면 열기", "커스텀 클립보드"):
             with self.subTest(gone=gone):
                 self.assertNotIn(gone, block, f'메뉴에 "{gone}" 가 남아 있습니다')
 
@@ -145,11 +145,19 @@ class HeaderControls(unittest.TestCase):
         self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
 
     def test_three_icon_buttons_with_tips(self):
-        for maker in ('self._draw_pin, "항상 위에 두기"',
+        for maker in ('self._draw_ontop, "항상 위에 두기"',
                       'self._draw_compare, "결재 전후 비교"',
-                      'self._draw_clip, "빠른 붙여넣기"'):
+                      'self._draw_clip, "커스텀 클립보드"'):
             with self.subTest(maker=maker):
                 self.assertIn(maker, self.source)
+
+    def test_ontop_icon_is_stacked_pages_with_a_fillable_front(self):
+        """압정이 아니라, 페이지가 겹친 모양. 맨 앞 장이 차 있으면 켜짐."""
+        block = self.source[self.source.index("def _draw_ontop"):]
+        block = block[:block.index("\n    def ", 10)]
+        self.assertIn("create_rectangle", block)
+        self.assertIn("SLATE if on else PAPER", block, "맨 앞 장의 채움으로 상태를 표시해야 합니다")
+        self.assertNotIn("바늘", block, "압정 그림이 남아 있습니다")
 
     def test_every_header_button_shows_a_tip(self):
         """아이콘에 마우스를 올리면 무슨 기능인지 떠야 한다."""
@@ -172,6 +180,36 @@ class HeaderControls(unittest.TestCase):
         block = block[:block.index("\n    def ", 10)]
         self.assertIn("_round_rect", block)
         self.assertIn("GLOW if self._folder_hover", block)
+
+    def test_opacity_row_shares_a_line_with_the_folder_box(self):
+        """슬라이더는 절반만 쓰고, 남은 자리를 폴더 경로 박스가 채운다.
+
+        따로 폴더 단추는 두지 않는다 — 폴더 박스를 눌러서 확인·열기·바꾸기.
+        """
+        build = self.source[self.source.index("def _build"):]
+        build = build[:build.index("\n    def ", 10)]
+        self.assertIn('self.opacity_slider = tk.Canvas(self.opacity_row', build)
+        self.assertIn('width=40', build, "슬라이더 폭을 작게 고정해야 폴더 박스가 넓어집니다")
+        self.assertIn('self.folderchip = tk.Canvas(self.opacity_row', build,
+                      "폴더 박스가 투명도 줄과 같은 줄에 있어야 합니다")
+        self.assertNotIn('"폴더 확인"', build)
+        self.assertNotIn('"폴더 변경"', build)
+        # "처리할 것 N건" 요약은 폴더 박스 다음, 목록 바로 위에 온다
+        self.assertLess(build.index("self.folderchip"), build.index("self.summary ="))
+        self.assertLess(build.index("self.summary ="), build.index("self.body ="))
+
+    def test_folder_path_is_trimmed_to_fit_by_pixels(self):
+        self.assertIn('_fit_text("폴더  " + short', self.source)
+
+        class FakeFont:
+            def measure(self, s):
+                return len(s) * 7
+
+        short = widget._fit_text("D:/아주/긴/폴더/경로/공문 정리함/공문", FakeFont(), 70)
+        self.assertTrue(short.endswith("…"))
+        self.assertLessEqual(FakeFont().measure(short), 70)
+        # 짧으면 그대로 둔다
+        self.assertEqual(widget._fit_text("공문", FakeFont(), 300), "공문")
 
 
 class BringingItBack(unittest.TestCase):
