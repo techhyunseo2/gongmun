@@ -223,6 +223,38 @@
   }
   /* 서식 보기 — hwpx 리더가 만든 구조 */
   .body.formatted{white-space:normal; color:var(--ink); background:var(--card); padding:16px 18px; max-height:400px}
+  /* 문서 그대로 보기 — 한글 문서 안에 든 첫 쪽 그림, PDF 는 브라우저 뷰어.
+     그림을 못 꺼내면 .noimg 가 붙어 글자 미리보기로 물러난다. */
+  .pagewrap{
+    border:1px solid var(--rule); border-radius:3px; background:var(--paper);
+    max-height:440px; overflow:auto; text-align:center;
+  }
+  .pagewrap .pageview{display:block; width:100%; height:auto; background:#fff; cursor:zoom-in}
+  .pagewrap .pagefallback{display:none}
+  .pagewrap.noimg{max-height:none; border:0; background:none}
+  .pagewrap.noimg .pageview{display:none}
+  .pagewrap.noimg .pagefallback{display:block}
+  .pdfview{
+    width:100%; height:440px; border:1px solid var(--rule); border-radius:3px;
+    background:var(--paper); display:block;
+  }
+  .pagenote{color:var(--ink-soft); font-size:11.5px; margin-top:6px; text-align:left}
+  /* 크게 보기 — 미리보기 그림을 누르면 화면 가운데에 띄운다.
+     패널은 480px 인데 그림 원본은 724px 라, 패널 안에서 키우면 가로로
+     밀어 가며 읽어야 한다. 겹침은 패널(11)보다 위, 알림(20)보다 아래. */
+  .zoomview{
+    position:fixed; inset:0; z-index:15; display:flex; cursor:zoom-out;
+    align-items:center; justify-content:center; padding:24px;
+    background:rgba(22,32,27,.72);
+  }
+  /* class 규칙이 hidden 속성의 기본 스타일을 이긴다. 이 줄이 없으면
+     확대창이 처음부터 화면을 덮은 채로 뜬다. */
+  .zoomview[hidden]{display:none}
+  .zoomview img{
+    /* 원본(724px)보다 크게 늘리지 않는다. 늘려 봐야 글씨만 뭉갠다. */
+    max-width:min(724px, 94vw); max-height:94vh; width:auto; height:auto;
+    background:#fff; box-shadow:var(--shadow); border-radius:2px;
+  }
   .body .hx-p{margin:0 0 .38em; line-height:1.65}
   .body .hx-p:last-child{margin-bottom:0}
   .body .hx-center{text-align:center}
@@ -306,6 +338,7 @@
 
 <div class="scrim" id="scrim"></div>
 <aside id="panel" aria-hidden="true"></aside>
+<div class="zoomview" id="zoom" hidden><img alt="크게 본 미리보기"></div>
 <div id="toast"></div>
 
 <script>
@@ -641,12 +674,27 @@ function _filelist(members, doc){
     return `<button class="filerow" data-file="${m.id}" aria-pressed="${viewingFile===m.id}">
       ${tag}<span class="nm">${esc(m.filename)}</span>${note}</button>`;
   }).join("");
-  return `<div class="field"><label><span>이 공문에 딸린 문서 ${members.length}개</span><span class="hint">눌러서 미리보기</span></label>
+  return `<div class="field"><label><span>이 공문에 딸린 문서 ${members.length}개</span><span class="hint">눌러서 미리보기 · 두 번 눌러 열기</span></label>
     <div class="files">${rows}</div></div>`;
 }
 
 function _preview(doc, label){
-  if (!doc.body && !doc.body_html){
+  const name = (doc.filename || "").toLowerCase();
+  const isPdf = name.endsWith(".pdf");
+  const isHwp = name.endsWith(".hwp") || name.endsWith(".hwpx");
+  const short = label && label.length > 34 ? label.slice(0, 33) + "…" : label;
+  const heading = short ? `미리보기 — ${esc(short)}` : "본문 미리보기";
+  const id = encodeURIComponent(doc.id);
+
+  // PDF 는 브라우저에 딸린 뷰어가 전 쪽을 그대로 그린다. 우리가 글자를
+  // 뽑아 늘어놓는 것보다 실제 문서에 가깝다.
+  if (isPdf && !plainView){
+    return `<div class="field"><label><span>${heading}</span>
+      <button class="viewswitch" id="viewswitch">글자만 보기</button></label>
+      <iframe class="pdfview" src="/api/file?id=${id}" title="${esc(heading)}"></iframe></div>`;
+  }
+
+  if (!doc.body && !doc.body_html && !isHwp){
     if (doc.readable === false){
       return `<div class="field"><label><span>미리보기</span></label>
         <div class="empty">이 형식은 프로그램이 열어 보지 못합니다.
@@ -654,13 +702,27 @@ function _preview(doc, label){
     }
     return "";
   }
+
   const hasForm = !!doc.body_html;
   const formatted = hasForm && !plainView;
   const inner = formatted ? doc.body_html : esc((doc.body||"").slice(0,4000));
-  const toggle = hasForm
-    ? `<button class="viewswitch" id="viewswitch">${formatted ? "글자만 보기" : "서식 보기"}</button>` : "";
-  const short = label && label.length > 34 ? label.slice(0, 33) + "…" : label;
-  const heading = short ? `미리보기 — ${esc(short)}` : "본문 미리보기";
+
+  // 한글 문서는 저장할 때 첫 쪽 그림을 파일 안에 함께 넣어 둔다. 표와
+  // 서식이 그대로 보이므로 글자만 뽑는 것보다 낫다. 그림이 없는 문서면
+  // onerror 가 .noimg 를 붙여 아래 글자 미리보기가 대신 나온다.
+  if (isHwp && !plainView){
+    return `<div class="field"><label><span>${heading}</span>
+      <button class="viewswitch" id="viewswitch">글자만 보기</button></label>
+      <div class="pagewrap">
+        <img class="pageview" src="/api/preview-image?id=${id}" alt="${esc(heading)}"
+             onerror="this.parentNode.classList.add('noimg')">
+        <div class="pagefallback body ${formatted ? "formatted" : ""}">${inner}</div>
+      </div>
+      <div class="pagenote">그림을 누르면 크게 볼 수 있습니다. 문서에 저장된 첫 쪽이며, 전체는 아래 "보고 있는 파일 열기" 로 보세요.</div></div>`;
+  }
+
+  const toggle = hasForm || isHwp || isPdf
+    ? `<button class="viewswitch" id="viewswitch">${plainView ? "문서 그대로 보기" : "글자만 보기"}</button>` : "";
   return `<div class="field"><label><span>${heading}</span>${toggle}</label>
     <div class="body ${formatted ? "formatted" : ""}">${inner}</div></div>`;
 }
@@ -722,8 +784,15 @@ async function openPanel(id, fileId){
   $("memo").onblur = async e => {
     state = await call("/api/memo", {id, memo:e.target.value}); render();
   };
-  $("panel").querySelectorAll(".filerow").forEach(row => row.onclick = () => {
-    openPanel(id, row.dataset.file);
+  $("panel").querySelectorAll(".filerow").forEach(row => {
+    row.onclick = () => openPanel(id, row.dataset.file);
+    // 두 번 누르면 그 파일이 연결된 프로그램으로 바로 열린다. 첨부 서식은
+    // 미리보기로 훑고 끝나는 게 아니라 열어서 고쳐 내는 일이 대부분이다.
+    row.ondblclick = async () => {
+      const res = await call("/api/open?id=" + encodeURIComponent(row.dataset.file));
+      if (res.error) toast(res.error);
+      else toast("파일을 엽니다.");
+    };
   });
   $("panel").querySelectorAll(".datechip").forEach(chip => chip.onclick = async () => {
     const picked = chip.dataset.date;
@@ -734,7 +803,9 @@ async function openPanel(id, fileId){
   });
 
   const switcher = $("viewswitch");
-  if (switcher) switcher.onclick = () => { plainView = !plainView; openPanel(id); };
+  // 보고 있던 파일을 그대로 둔 채 보기 방식만 바꾼다. viewingFile 을 넘기지
+  // 않으면 첨부를 보다가 토글했을 때 본문으로 튕겨 나간다.
+  if (switcher) switcher.onclick = () => { plainView = !plainView; openPanel(id, viewingFile); };
   $("openfile").onclick = async () => {
     const res = await call("/api/open?id=" + encodeURIComponent(viewingFile || id));
     if (res.error) toast(res.error);
@@ -785,18 +856,33 @@ $("scrim").onclick = closePanel;
 $("tidy").onclick = async () => {
   const preview = await call("/api/organize?preview=1");
   const plan = preview.organized || {};
-  if (!plan.moved){
+  if (!plan.moved && !plan.trashed){
     toast("정리할 파일이 없습니다.");
     return;
   }
   const names = (plan.folders || []).slice(0, 6).map(n => "  · " + n).join("\n");
   const more = (plan.folders || []).length > 6 ? `\n  … 그 밖에 ${plan.folders.length - 6}개` : "";
-  if (!confirm(`파일 ${plan.moved}개를 공문별 폴더로 옮깁니다.\n\n${names}${more}\n\n파일을 지우지는 않습니다. 계속할까요?`)) return;
+  // 같은 공문을 또 내려받은 경우를 미리 알린다. 휴지통은 되돌릴 수 있지만
+  // 파일이 없어지는 일이므로 누르기 전에 몇 건인지 보여야 한다.
+  const dup = plan.trashed
+    ? `\n\n이미 정리해 둔 것과 똑같은 파일 ${plan.trashed}개는 휴지통으로 보냅니다.\n(휴지통에서 되돌릴 수 있습니다)` : "";
+  const rev = plan.renamed
+    ? `\n\n이름은 같은데 내용이 다른 ${plan.renamed}개는 뒤에 (2) 를 붙여 함께 넣습니다.` : "";
+  const head = plan.moved ? `파일 ${plan.moved}개를 공문별 폴더로 옮깁니다.\n\n${names}${more}`
+                          : "옮길 파일은 없습니다.";
+  if (!confirm(`${head}${dup}${rev}\n\n계속할까요?`)) return;
   $("tidy").dataset.busy = "1";
   state = await call("/api/organize");
   $("tidy").dataset.busy = "0";
   const done = state.organized || {};
-  toast(`${done.moved}개를 ${(done.folders||[]).length}개 폴더로 옮겼습니다.`);
+  const extra = [done.trashed ? `같은 파일 ${done.trashed}개는 휴지통으로` : "",
+                 done.renamed ? `${done.renamed}개는 (2) 를 붙여` : ""].filter(Boolean).join(", ");
+  toast(`${done.moved}개를 ${(done.folders||[]).length}개 폴더로 옮겼습니다.`
+        + (extra ? ` ${extra} 보냈습니다.` : ""));
+  // 못 옮긴 것이 있으면 반드시 말한다. 조용히 넘어가면 "눌러도 아무 일이
+  // 없다" 가 되어, 쓰는 분이 같은 자리에서 계속 막힌다.
+  const stuck = done.problems || [];
+  if (stuck.length) alert("아래 파일은 그대로 두었습니다.\n\n" + stuck.join("\n"));
   render();
 };
 $("archive").onclick = async () => {
@@ -827,7 +913,30 @@ $("setfolder").onclick = async () => {
   if (res.error) return toast(res.error);
   state = res; toast("폴더를 바꿨습니다."); render();
 };
-document.addEventListener("keydown", e => { if (e.key === "Escape") closePanel(); });
+// 미리보기 그림을 크게 보기. 패널을 다시 그릴 때마다 걸어 주지 않아도
+// 되게 문서 전체에서 한 번만 받는다.
+function openZoom(src){
+  const box = $("zoom");
+  box.querySelector("img").src = src;
+  box.hidden = false;
+}
+function closeZoom(){
+  const box = $("zoom");
+  box.hidden = true;
+  box.querySelector("img").removeAttribute("src");   // 큰 그림을 붙들고 있지 않는다
+}
+document.addEventListener("click", e => {
+  const shot = e.target.closest(".pageview");
+  if (shot) return openZoom(shot.src);
+  if (e.target.closest(".zoomview")) closeZoom();
+});
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  // 크게 보기가 떠 있으면 그것부터 닫는다. 함께 닫히면 공문을 다시
+  // 찾아 들어가야 한다.
+  if (!$("zoom").hidden) return closeZoom();
+  closePanel();
+});
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 
 (async () => {

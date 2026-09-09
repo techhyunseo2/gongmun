@@ -162,5 +162,84 @@ class Archiving(MixedFolder):
                          "압축·이미지가 공문 폴더에 남겨졌습니다")
 
 
+class DownloadedTwice(MixedFolder):
+    """같은 공문을 또 내려받았을 때.
+
+    폴더 정리를 이미 마친 공문을 에듀파인에서 다시 받으면, 인박스에 같은
+    이름의 파일이 생긴다. 예전에는 갈 자리에 같은 이름이 있으면 그냥
+    건너뛰어서 — 탐색기가 묻는 "덮어쓸까요" 같은 것도 없이 — 그 파일이
+    정리를 아무리 눌러도 인박스에 그대로 남았다. 실사용에서 걸리셨다.
+    """
+
+    RECEIPT = "[예시중학교-4971]"
+
+    def _first_round(self):
+        body = self.inbox / f"{self.RECEIPT} (본문) 파견교사 선발 계획 알림.txt"
+        att = self.inbox / f"{self.RECEIPT} (첨부) 제출서식.txt"
+        body.write_text(BODY, encoding="utf-8")
+        att.write_text("서식\n", encoding="utf-8")
+        organize.organize(self.inbox)
+        return body
+
+    def test_same_file_again_goes_to_the_trash(self):
+        body = self._first_round()
+        body.write_text(BODY, encoding="utf-8")          # 똑같은 것을 또 받았다
+
+        report = organize.organize(self.inbox)
+
+        self.assertEqual(report["trashed"], 1)
+        self.assertFalse(body.exists(), "정리를 눌렀는데 인박스에 그대로 남았습니다")
+        self.assertEqual(report["renamed"], 0)
+
+    def test_edited_version_is_kept_side_by_side(self):
+        """이름은 같은데 내용이 다르면 고쳐 올라온 판이다. 지우면 안 된다."""
+        body = self._first_round()
+        body.write_text(BODY + "\n붙임 하나가 늘었습니다.\n", encoding="utf-8")
+
+        report = organize.organize(self.inbox)
+
+        self.assertEqual(report["renamed"], 1)
+        self.assertEqual(report["trashed"], 0)
+        self.assertFalse(body.exists())
+        landed = sorted(p.name for p in (self.inbox / "파견교사 선발 계획 알림").iterdir())
+        self.assertIn(f"{self.RECEIPT} (본문) 파견교사 선발 계획 알림 (2).txt", landed)
+        self.assertIn(f"{self.RECEIPT} (본문) 파견교사 선발 계획 알림.txt", landed)
+
+    def test_preview_says_what_will_happen(self):
+        """누르기 전에 몇 건이 휴지통으로 가는지 알려야 한다."""
+        body = self._first_round()
+        body.write_text(BODY, encoding="utf-8")
+
+        plan = organize.organize(self.inbox, dry_run=True)
+
+        self.assertEqual(plan["trashed"], 1)
+        self.assertTrue(body.exists(), "미리보기가 파일을 건드렸습니다")
+
+    def test_nothing_is_skipped_into_limbo_anymore(self):
+        """되풀이해 눌러도 남는 것이 없어야 한다."""
+        body = self._first_round()
+        for _ in range(3):
+            body.write_text(BODY, encoding="utf-8")
+            organize.organize(self.inbox)
+        leftovers = [p.name for p in self.inbox.iterdir() if p.is_file()]
+        self.assertEqual(leftovers, [], f"인박스에 남았습니다: {leftovers}")
+
+    def test_unreadable_pair_is_compared_by_bytes(self):
+        """내용을 못 읽는 형식(zip·png)도 바이트로 견줘 판단한다."""
+        one = self.inbox / "가.zip"
+        other = self.inbox / "나.zip"
+        one.write_bytes(b"PK\x03\x04" + b"\0" * 500)
+        other.write_bytes(b"PK\x03\x04" + b"\0" * 500)
+        self.assertTrue(organize.same_file_content(one, other))
+        other.write_bytes(b"PK\x03\x04" + b"\1" * 500)
+        self.assertFalse(organize.same_file_content(one, other))
+
+    def test_missing_file_is_never_called_identical(self):
+        """읽지 못하면 같다고 우기지 않는다 — 우기면 지워 버린다."""
+        one = self.inbox / "있다.txt"
+        one.write_text("가", encoding="utf-8")
+        self.assertFalse(organize.same_file_content(one, self.inbox / "없다.txt"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

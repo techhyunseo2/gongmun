@@ -118,6 +118,10 @@ class Store:
         known = {row["id"]: row["path"]
                  for row in self.conn.execute("SELECT id, path FROM docs")}
         seen: set[str] = set()
+        # 이번 훑기에서 어떤 id 가 어느 자리를 차지했는지. 문서를 고쳐 저장하면
+        # 내용이 달라져 id 도 새로 생기는데, 같은 자리의 옛 판을 지우지 않으면
+        # 같은 이름이 두 번 세 번 쌓인다.
+        taken: dict[str, str] = {}
 
         files = [p for p in sorted(folder.rglob("*"))
                  if p.is_file() and not p.name.startswith(("~$", "."))]
@@ -136,6 +140,7 @@ class Store:
                 continue          # 우리 공문과 이어 붙일 수 없는 남의 파일
             doc_id = _file_id(path, None if readable else COMPANION_HASH_BYTES)
             seen.add(doc_id)
+            taken[str(path)] = doc_id
             if doc_id in known and not force:
                 # 자리나 이름이 그대로면 아무것도 쓰지 않는다. 쓸데없이 써 두면
                 # 바뀐 게 없는데도 rev 가 올라 위젯이 헛되이 다시 그린다.
@@ -164,10 +169,12 @@ class Store:
             hint = result.get("receipt_number") or folder_receipt.get(path.parent, "")
             result["group_key"], result["role"] = group_key(path, folder, hint)
             self._upsert(doc_id, path, result, body, body_html, error, readable)
+            if doc_id not in known:
+                self._carry_over(doc_id, path)
             if not error:
                 added += 1
 
-        removed = self._forget_missing(seen, folder)
+        removed = self._forget_missing(seen, folder, taken)
         self.conn.commit()
         if added or failed or removed or moved:
             self.rev += 1
@@ -209,14 +216,53 @@ class Store:
             ),
         )
 
-    def _forget_missing(self, seen: set[str], folder: Path) -> int:
+    def _carry_over(self, doc_id: str, path: Path) -> None:
+        """같은 자리에 있던 옛 판의 손자국을 새 판으로 물려준다.
+
+        문서를 열어 고쳐 저장하면 내용이 달라져 id 가 새로 생긴다. 파일은
+        그대로 그 자리에 있는데 처리 표시와 메모, 손으로 고친 분류와 기한이
+        사라지면 안 된다. 기한은 손으로 정한 것만 가져온다 — 그러지 않으면
+        새 내용에서 읽어 낸 기한이 옛 값에 덮인다.
+        """
+        # 이미 옛 판이 여러 개 쌓여 있던 기록에서는(이 버릇을 고치기 전에
+        # 만들어진 것) 손자국이 남은 쪽을 고른다. 그래야 메모가 살아난다.
+        old = self.conn.execute(
+            """SELECT done, memo, category_manual, deadline, deadline_edited,
+                      archived, pinned
+               FROM docs WHERE path=? AND id<>?
+               ORDER BY (COALESCE(done, 0)
+                         + (COALESCE(memo, '') <> '')
+                         + (COALESCE(category_manual, '') <> '')
+                         + COALESCE(deadline_edited, 0)
+                         + COALESCE(pinned, 0)
+                         + (COALESCE(archived, '') <> '')) DESC,
+                        scanned_at DESC
+               LIMIT 1""",
+            (str(path), doc_id)).fetchone()
+        if old is None:
+            return
+        self.conn.execute(
+            """UPDATE docs SET done=?, memo=?, category_manual=?, archived=?, pinned=?,
+                               deadline=CASE WHEN ?=1 THEN ? ELSE deadline END,
+                               deadline_edited=?
+               WHERE id=?""",
+            (old["done"], old["memo"], old["category_manual"], old["archived"],
+             old["pinned"], old["deadline_edited"], old["deadline"],
+             old["deadline_edited"], doc_id))
+
+    def _forget_missing(self, seen: set[str], folder: Path,
+                        taken: dict[str, str] | None = None) -> int:
         """이번에 훑은 폴더 밖의 기록을 정리한다.
 
         월별 폴더로 옮긴 문서는 정리했다는 표시가 있으므로 남긴다.
         그 표시가 없는데 공문 폴더 밖에 있는 것은 실수로 읽어들인
         남의 파일이므로 기록에서 지운다. 파일 자체는 건드리지 않는다.
+
+        taken 은 이번 훑기에서 각 자리를 차지한 id 다. 자리는 그대로인데
+        임자가 바뀌었으면 고쳐 저장하기 전의 옛 판이므로 지운다.
         """
         rows = self.conn.execute("SELECT id, path, archived FROM docs").fetchall()
+        taken = taken or {}
         gone: list[str] = []
         for row in rows:
             if row["id"] in seen:
@@ -224,6 +270,10 @@ class Store:
             path = Path(row["path"])
             if not path.exists():
                 gone.append(row["id"])
+                continue
+            holder = taken.get(row["path"])
+            if holder and holder != row["id"]:
+                gone.append(row["id"])       # 고쳐 저장하기 전의 옛 판
                 continue
             if row["archived"]:              # 우리가 옮긴 것은 그대로 둔다
                 continue

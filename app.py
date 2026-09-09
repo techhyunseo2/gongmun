@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from classify import CATEGORIES, CATEGORY_ORDER, days_left  # noqa: E402
 from store import Store  # noqa: E402
+import extract  # noqa: E402
 import organize  # noqa: E402
 
 def _base_dir() -> Path:
@@ -498,6 +499,35 @@ class Handler(BaseHTTPRequestHandler):
             state = self._archive(preview)
             return self._json(state)
 
+        if route == "/api/preview-image":
+            # 한글 문서 안에 든 첫 쪽 그림. 글자만 뽑아 보여 주는 것보다
+            # 표·서식이 그대로 보인다. 없으면 404 를 주고 화면이 글자
+            # 미리보기로 물러난다.
+            doc = self.store.get(query.get("id", [""])[0])
+            if not doc:
+                return self._json({"error": "찾을 수 없습니다."}, 404)
+            image = extract.preview_image(Path(doc["path"]))
+            if not image:
+                return self._json({"error": "미리보기 그림이 없습니다."}, 404)
+            return self._send(200, image, "image/png",
+                              {"Cache-Control": "private, max-age=604800"})
+
+        if route == "/api/file":
+            # PDF 를 브라우저 내장 뷰어로 보여 주기 위해 원본을 그대로 넘긴다.
+            # 우리 기록에 있는 문서만 — 아무 경로나 읽어 가지 못하게 한다.
+            doc = self.store.get(query.get("id", [""])[0])
+            if not doc:
+                return self._json({"error": "찾을 수 없습니다."}, 404)
+            target = Path(doc["path"])
+            if target.suffix.lower() != ".pdf" or not target.is_file():
+                return self._json({"error": "보여 줄 수 없는 형식입니다."}, 404)
+            try:
+                data = target.read_bytes()
+            except OSError:
+                return self._json({"error": "읽지 못했습니다."}, 404)
+            return self._send(200, data, "application/pdf",
+                              {"Cache-Control": "private, max-age=604800"})
+
         if route == "/api/reveal":
             doc = self.store.get(query.get("id", [""])[0])
             if not doc:
@@ -581,19 +611,20 @@ class Handler(BaseHTTPRequestHandler):
         return titles
 
     def _archive(self, preview: bool) -> dict:
-        """끝난 공문을 마감 월 폴더로 옮긴다."""
+        """끝난 공문을 마감 월 폴더로 옮긴다.
+
+        기한도 행사일도 없는 문서는 오늘 달로 보낸다 — 정리를 눌렀는데
+        인박스에 그대로 남는 문서가 없게 한다.
+        """
         base, inbox = self.base, self.folder
-        entries, skipped = [], 0
+        today = date.today()
+        entries = []
         for group in fold_groups(self.store.all_docs()):
             if not group["done"] or group.get("archived"):
                 continue
-            month = _month_of(group)
-            if month is None:
-                skipped += 1
-                continue
             entries.append({
                 "title": group.get("title") or group["filename"],
-                "month": month,
+                "month": _month_of(group, today),
                 "receipt": group.get("receipt_number") or "",
                 "paths": group["paths"],
                 "ids": [m["id"] for m in group["members"]],
@@ -606,7 +637,7 @@ class Handler(BaseHTTPRequestHandler):
                 for member_id, old in zip(entry["ids"], entry["paths"]):
                     if old in moved:
                         self.store.relocate(member_id, moved[old], f"{entry['month']}월")
-        report["no_date"] = skipped
+        report["no_date"] = 0
         report["base"] = str(base)
         state = self._state()
         state["archived_report"] = report
@@ -709,16 +740,22 @@ def _pick_lead(members: list[dict]) -> dict:
                               not m.get("deadline")))
 
 
-def _month_of(group: dict) -> int | None:
-    """어느 달 폴더로 보낼지 정한다. 마감 → 행사일 → 파일 날짜 순으로 본다."""
-    for key in ("deadline", "event_date", "modified"):
+def _month_of(group: dict, today: date) -> int:
+    """어느 달 폴더로 보낼지 정한다. 마감 → 행사일 순으로 보고,
+    둘 다 없으면 오늘 달로 보낸다.
+
+    예전에는 마지막으로 파일이 고쳐진 날짜(modified)를 봤는데, 옮기거나
+    다시 저장할 때마다 이 날짜가 바뀌고, 받은 지 오래된 문서는 이미 지난
+    달을 가리켜 정리를 눌러도 아무 데도 못 가고 인박스에 그대로 남았다.
+    """
+    for key in ("deadline", "event_date"):
         value = group.get(key)
         if value:
             try:
                 return int(str(value).split("-")[1])
             except (IndexError, ValueError):
                 continue
-    return None
+    return today.month
 
 
 def _sort_key(doc: dict):

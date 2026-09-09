@@ -16,6 +16,18 @@ sys.path.insert(0, str(ROOT))
 import widget  # noqa: E402
 
 
+def _iss_section(name: str) -> str:
+    """installer.iss 의 [절] 하나만 떼어 온다.
+
+    주석에도 "[Icons]" 같은 말이 나오므로 줄 첫머리의 절 이름만 센다.
+    """
+    import re
+    body = (ROOT / "installer.iss").read_text(encoding="utf-8")
+    found = re.search(rf"^\[{name}\]\s*$(.*?)(?=^\[|\Z)", body, re.M | re.S)
+    assert found, f"installer.iss 에 [{name}] 절이 없습니다"
+    return found.group(1)
+
+
 class Opacity(unittest.TestCase):
 
     def test_floor_keeps_the_widget_findable(self):
@@ -41,6 +53,103 @@ class Opacity(unittest.TestCase):
     def test_floor_is_actually_usable(self):
         self.assertGreaterEqual(widget.OPACITY_MIN, 0.4,
                                 "이보다 흐리면 위젯이 사실상 안 보인다")
+
+
+class GlyphFlow(unittest.TestCase):
+    """자주 쓰는 문자를 늘어놓는 방식.
+
+    예전에는 여섯 개마다 줄을 잘랐다. 한 글자짜리만 담아 두면 오른쪽이
+    절반 넘게 비었고(320px 중 150px 가량), grid 는 열 너비를 모든 줄이
+    나눠 쓰기 때문에 아래에 긴 것이 하나 있으면 위쪽 줄까지 그만큼
+    벌어져 빈자리가 생겼다.
+    """
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        block = self.source[self.source.index("glyphs = list(self.config.get"):]
+        self.block = block[:block.index("담아 둔 글")]
+
+    def test_it_no_longer_cuts_every_six(self):
+        for count in ("i // 6", "i % 6"):
+            with self.subTest(count=count):
+                self.assertNotIn(count, self.block,
+                                 "아직 개수로 줄을 자르고 있습니다")
+
+    def test_the_width_decides_where_the_line_breaks(self):
+        self.assertIn("used + span > GLYPH_ROW_WIDTH", self.block)
+
+    def test_the_width_is_measured_not_guessed(self):
+        """여백과 테두리가 몇 px 인지는 tk 판과 화면 배율에 따라 다르다.
+
+        숫자로 적어 두면 어긋난 만큼 마지막 칸이 오른쪽 벽을 넘어 잘린다.
+        같은 차림의 칸을 하나 만들어 실제 요청 폭을 재야 한다.
+        """
+        self.assertIn("probe.winfo_reqwidth()", self.block)
+        self.assertIn("probe.destroy()", self.block, "재고 나면 치워야 합니다")
+
+    def test_the_gap_between_cells_is_counted(self):
+        """칸 사이 간격도 줄 폭을 먹는다.
+
+        빠뜨리면 한 줄에 여럿 놓일수록 간격이 쌓여(아홉 개면 36px) 줄
+        끝이 창 밖으로 밀려난다. 실제로 그렇게 잘렸다.
+        """
+        self.assertIn("probe.winfo_reqwidth() + GLYPH_GAP", self.block)
+        self.assertIn("padx=(0, GLYPH_GAP)", self.block,
+                      "세는 간격과 실제로 벌리는 간격이 같아야 합니다")
+
+    def test_each_line_is_its_own_frame(self):
+        """grid 로 두면 긴 항목 하나가 다른 줄까지 벌려 놓는다."""
+        self.assertNotIn(".grid(", self.block, "줄마다 따로 배치해야 합니다")
+        self.assertIn('line = tk.Frame(grid, bg=PAPER)', self.block)
+        self.assertIn('cell.pack(side="left"', self.block)
+
+    def test_the_usable_width_follows_the_widget(self):
+        """위젯 폭이 바뀌어도 따라가야 한다. 숫자를 박아 두면 어긋난다."""
+        self.assertIn("GLYPH_ROW_WIDTH = WIDTH - 12 * 2", self.source)
+        self.assertEqual(widget.GLYPH_ROW_WIDTH, widget.WIDTH - 24)
+
+    def test_no_line_can_overflow_the_widget(self):
+        """실제로 배치해 보고 어느 줄도 벽을 넘지 않는지 확인한다.
+
+        소스만 훑으면 셈이 틀린 것은 잡지 못한다. 여기서 창을 하나 띄우되
+        화면에는 내보내지 않는다(withdraw). 화면이 없는 곳에서는 건너뛴다.
+        """
+        import tkinter as tk
+
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:            # 화면 없는 CI
+            self.skipTest(f"화면이 없습니다: {exc}")
+        root.withdraw()
+        try:
+            from tkinter import font as tkfont
+            f_row = tkfont.Font(family="맑은 고딕", size=9)
+            grid = tk.Frame(root)
+            probe = tk.Label(grid, font=f_row, padx=7, pady=3, highlightthickness=1)
+
+            # 한 글자짜리와 긴 것을 섞는다 — 실제로 잘렸던 구성이다
+            glyphs = (["○", "※", "℃", "→", "·", "①", "②", "③", "㈜", "√"]
+                      + list("asdfg") + ["ga", "sasdasd", "제출기한", "담당자"])
+            widths, used = [], 0
+            for text in glyphs:
+                probe.config(text=widget._one_line(text, 6))
+                span = probe.winfo_reqwidth() + widget.GLYPH_GAP
+                if not widths or used + span > widget.GLYPH_ROW_WIDTH:
+                    widths.append(0)
+                    used = 0
+                used += span
+                widths[-1] = used
+
+            for i, line in enumerate(widths, 1):
+                with self.subTest(line=i):
+                    self.assertLessEqual(
+                        line, widget.GLYPH_ROW_WIDTH,
+                        f"{i}번째 줄이 {line - widget.GLYPH_ROW_WIDTH}px 넘칩니다")
+            # 넘치지만 않으면 되는 게 아니라, 남는 자리도 적어야 뜻이 있다
+            self.assertGreater(max(widths), widget.GLYPH_ROW_WIDTH * 0.8,
+                               "폭을 채우지 못하고 있습니다")
+        finally:
+            root.destroy()
 
 
 class QuickBar(unittest.TestCase):
@@ -119,6 +228,18 @@ class ToolDrawer(unittest.TestCase):
         block = self._block("_open_tool")
         self.assertIn("open_in_os", block)
         self.assertIn("webbrowser.open", block)   # 웹 주소도 연다
+
+    def test_a_folder_can_be_picked_not_just_typed(self):
+        """윈도우 파일 고르기 창으로는 폴더를 집을 수 없다.
+
+        예전에는 "찾기" 가 파일만 골라서, 폴더를 등록하려면 경로를 손으로
+        쳐야 했다. 자주 여는 것은 오히려 폴더 쪽이다.
+        """
+        block = self._block("_pick_tool_path")
+        self.assertIn("askdirectory", block)
+        self.assertIn("askopenfilename", block)
+        self.assertIn('self._foot_button(r, "폴더"', self.source)
+        self.assertIn("self._pick_tool_path(ep, folder=True)", self.source)
 
     def test_missing_target_does_not_crash(self):
         block = self._block("_open_tool")
@@ -322,6 +443,48 @@ class HeaderControls(unittest.TestCase):
         self.assertEqual(widget._fit_text("공문", FakeFont(), 300), "공문")
 
 
+class RowMenu(unittest.TestCase):
+    """공문 한 줄에서 오른쪽 버튼 — 고정·폴더 열기·문서 바로 열기.
+
+    tkinter 창을 실제로 띄우는 부분은 CI 에서 믿을 수 없으므로(파일 머리말
+    참고), 오른쪽 버튼이 걸려 있는지와 두 메뉴가 겹쳐 뜨지 않는지만
+    소스로 확인한다.
+    """
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+
+    def _block(self, name):
+        block = self.source[self.source.index(f"def {name}"):]
+        return block[:block.index("\n    def ", 10)]
+
+    def test_row_is_bound_to_right_click(self):
+        self.assertIn('bind("<Button-3>", lambda e, d=doc: self._row_menu(e, d))',
+                      self.source)
+
+    def test_pinning_stays_in_the_menu(self):
+        """1.7.6 에서 넣은 고정 기능이 파일 열기에 밀려나면 안 된다."""
+        block = self._block("_row_menu")
+        self.assertIn("맨 위에 고정", block)
+        self.assertIn("self._set_pinned(doc, not pinned)", block)
+
+    def test_row_menu_does_not_stack_with_widget_menu(self):
+        """위젯 전체 메뉴도 오른쪽 버튼(root 의 <Button-3>)을 쓴다.
+
+        줄 메뉴가 "break" 를 돌려주지 않으면 위젯 전체 메뉴까지 겹쳐 뜬다.
+        """
+        self.assertIn('return "break"', self._block("_row_menu"))
+
+    def test_folder_open_and_document_open_share_open_in_os(self):
+        block = self._block("_row_menu")
+        self.assertIn('command=lambda: open_in_os(folder)', block)
+        self.assertIn('command=lambda p=member["path"]: open_in_os(Path(p))', block)
+
+    def test_missing_files_are_left_out(self):
+        """옮기거나 지운 파일을 눌러 오류창이 뜨면 안 된다."""
+        self.assertIn('Path(m["path"]).exists()', self._block("_row_menu"))
+
+
 class BringingItBack(unittest.TestCase):
     """가려지거나 화면 밖으로 나간 위젯을 되찾는 길.
 
@@ -443,6 +606,29 @@ class BringingItBack(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, iss,
                               f"installer.iss 의 [UninstallDelete] 에 {name} 을 남겨 두세요")
+
+    def test_installer_no_longer_offers_autorun(self):
+        """설치할 때 자동 실행을 켜 주지 않는다.
+
+        무심코 체크했다가 나중에 끄는 길을 못 찾는 일이 있었다. 시작
+        프로그램은 사람마다 사정이 다르므로(느린 컴퓨터, 공용 컴퓨터)
+        원하는 분만 사용설명서 11절대로 바로가기를 직접 넣게 한다.
+        """
+        # 설치 창의 체크 목록과, 그 체크가 만들던 바로가기 양쪽을 본다.
+        # (주석에서 옛 기능을 설명하는 것은 그대로 두어야 하므로 절 단위로 본다)
+        self.assertNotIn("startupicon", _iss_section("Tasks"),
+                         "설치 창에 자동 실행 체크가 남아 있습니다")
+        self.assertNotIn("{userstartup}", _iss_section("Icons"),
+                         "설치할 때 시작 폴더에 바로가기를 만들고 있습니다")
+        # 예전 판이 만들어 둔 바로가기는 업그레이드할 때 치운다
+        self.assertIn("{userstartup}", _iss_section("InstallDelete"))
+
+    def test_the_manual_still_shows_how_to_do_it_by_hand(self):
+        """기능을 없앴으면 직접 하는 길은 더 또렷해야 한다."""
+        manual = (ROOT / "사용설명서.txt").read_text(encoding="utf-8")
+        self.assertIn("shell:startup", manual)
+        self.assertNotIn('설치할 때 "컴퓨터를 켤 때 자동으로 띄우기" 를 체크하셨으면', manual,
+                         "없앤 설치 옵션을 설명서가 아직 안내하고 있습니다")
 
     def test_uninstaller_asks_before_deleting_records(self):
         """설정·기록(.gongmun)은 물어보고, 기본은 남기는 쪽이어야 한다."""

@@ -57,6 +57,9 @@ LIVE_SECONDS = 2.5          # 브라우저에서 고친 게 있는지 보는 주
 UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시 본다
 OPACITY_MIN = 0.5           # 더 흐려지면 위젯을 찾지 못해 되돌릴 길이 없어진다
 CLIP_MAX = 12               # 담아 둔 글은 이만큼만 두고 오래된 것부터 밀어낸다
+# 자주 쓰는 문자를 늘어놓을 수 있는 폭. 서랍의 좌우 여백(12씩)을 뺀 만큼이다.
+GLYPH_ROW_WIDTH = WIDTH - 12 * 2
+GLYPH_GAP = 4              # 칸과 칸 사이. 이만큼도 줄 폭에 넣어 세야 한다
 GLYPH_MAX = 40              # 고정해 둘 특수문자·문구 개수 상한
 TOOL_MAX = 18              # 도구 서랍에 등록해 둘 프로그램·폴더·파일 개수 상한
 
@@ -417,15 +420,38 @@ class Widget:
         grid = tk.Frame(q, bg=PAPER)
         grid.pack(fill="x", padx=12, pady=(5, 0))
         if glyphs:
-            for i, text in enumerate(glyphs):
-                cell = tk.Label(grid, text=_one_line(text, 6), font=self.f_row, bg=CARD,
+            # 글자 폭을 재어 오른쪽 벽에 닿을 때 줄을 바꾼다. 예전에는 여섯
+            # 개마다 잘라서, 한 글자짜리만 담아 두면 오른쪽이 휑하게 비었다.
+            #
+            # 줄마다 따로 Frame 을 두는 것도 그래서다. grid 는 열 너비를 모든
+            # 줄이 나눠 쓰기 때문에, 긴 것 하나가 아래에 있어도 위쪽 줄까지
+            # 그 폭만큼 벌어져 빈자리가 생겼다.
+            #
+            # 폭은 손으로 더하지 않고 같은 차림의 칸 하나를 만들어 재 본다.
+            # 여백과 테두리가 몇 px 을 먹는지는 tk 판과 화면 배율에 따라
+            # 달라서, 숫자로 적어 두면 어긋난 만큼 마지막 칸이 벽을 넘는다.
+            # 붙이지 않은 칸도 요청 폭은 제대로 알려 준다.
+            probe = tk.Label(grid, font=self.f_row, padx=7, pady=3,
+                             highlightthickness=1)
+            line, used = None, 0
+            for text in glyphs:
+                label = _one_line(text, 6)
+                probe.config(text=label)
+                span = probe.winfo_reqwidth() + GLYPH_GAP
+                if line is None or used + span > GLYPH_ROW_WIDTH:
+                    line = tk.Frame(grid, bg=PAPER)
+                    line.pack(fill="x")
+                    used = 0
+                cell = tk.Label(line, text=label, font=self.f_row, bg=CARD,
                                 fg=INK, cursor="hand2", padx=7, pady=3,
                                 highlightbackground=RULE, highlightthickness=1)
-                cell.grid(row=i // 6, column=i % 6, padx=(0, 4), pady=2, sticky="w")
+                cell.pack(side="left", padx=(0, GLYPH_GAP), pady=2)
+                used += span
                 cell.bind("<Button-1>",
                           lambda e, t=text, w=cell: self._copy_text(t, w, _one_line(t, 6)))
                 cell.bind("<Enter>", lambda e, w=cell: w.config(highlightbackground=INK))
                 cell.bind("<Leave>", lambda e, w=cell: w.config(highlightbackground=RULE))
+            probe.destroy()
         else:
             tk.Label(grid, text="편집을 눌러 ○ ※ ℃ 처럼 자주 쓰는 문자를 넣어 두세요",
                      font=self.f_small, bg=PAPER, fg=SOFT, anchor="w",
@@ -726,7 +752,7 @@ class Widget:
             if len(self._tool_rows) >= TOOL_MAX:
                 return
             r = tk.Frame(rows, bg=PAPER)
-            e_icon, e_name, e_path = field(r, 3), field(r, 10), field(r, 26)
+            e_icon, e_name, e_path = field(r, 3), field(r, 10), field(r, 22)
             e_icon.insert(0, icon)
             e_name.insert(0, name)
             e_path.insert(0, path)
@@ -734,8 +760,13 @@ class Widget:
             e_name.pack(side="left", padx=(4, 0))
             e_path.pack(side="left", padx=(4, 0))
             rec = {"frame": r, "icon": e_icon, "name": e_name, "path": e_path}
-            self._foot_button(r, "찾기",
-                              lambda e=None, ep=e_path: self._pick_tool_path(ep)).pack(side="left", padx=(4, 0))
+            # 파일과 폴더를 따로 고른다. 윈도우 파일 고르기 창으로는 폴더를
+            # 집을 수 없어서, 폴더를 등록하려면 경로를 손으로 쳐야 했다.
+            self._foot_button(r, "파일", lambda e=None, ep=e_path: self._pick_tool_path(ep),
+                              padx=5).pack(side="left", padx=(4, 0))
+            self._foot_button(r, "폴더",
+                              lambda e=None, ep=e_path: self._pick_tool_path(ep, folder=True),
+                              padx=5).pack(side="left", padx=(2, 0))
             self._foot_button(r, "▴", lambda e=None, x=rec: move(x, -1), padx=5).pack(side="left", padx=(4, 0))
             self._foot_button(r, "▾", lambda e=None, x=rec: move(x, 1), padx=5).pack(side="left", padx=(2, 0))
             self._foot_button(r, "✕", lambda e=None, x=rec: drop(x), padx=5).pack(side="left", padx=(2, 0))
@@ -773,12 +804,15 @@ class Widget:
         win.geometry(f"+{self.root.winfo_x() - 60}+{self.root.winfo_y() + 60}")
         win.grab_set()
 
-    def _pick_tool_path(self, entry):
+    def _pick_tool_path(self, entry, folder: bool = False):
         from tkinter import filedialog
-        chosen = filedialog.askopenfilename(title="열 프로그램·파일 고르기")
+        if folder:
+            chosen = filedialog.askdirectory(title="열 폴더 고르기")
+        else:
+            chosen = filedialog.askopenfilename(title="열 프로그램·파일 고르기")
         if chosen:
             entry.delete(0, "end")
-            entry.insert(0, chosen)
+            entry.insert(0, str(Path(chosen)))      # 폴더는 / 로 와서 \ 로 맞춘다
 
     # ------------------------------------------------------- 결재 전후 비교
 
@@ -1102,11 +1136,33 @@ class Widget:
             target.configure(cursor="hand2")
 
     def _row_menu(self, event, doc):
-        """행에서 오른쪽 버튼 — 중요한 공문을 맨 위에 고정하거나 푼다."""
+        """공문 한 줄에서 오른쪽 버튼.
+
+        맨 위에 고정하거나, 그 공문이 담긴 폴더를 열거나, 딸린 문서를
+        골라 바로 연다. 본문·첨부가 여럿이면 어느 것을 열지 골라야 하므로
+        파일 이름을 하나씩 늘어놓는다.
+        """
         pinned = bool(doc.get("pinned"))
+        members = doc.get("members") or [{"filename": doc["filename"], "path": doc["path"],
+                                          "role": doc.get("role") or ""}]
+        here = [m for m in members if m.get("path") and Path(m["path"]).exists()]
+
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="고정 해제" if pinned else "맨 위에 고정",
                          command=lambda: self._set_pinned(doc, not pinned))
+        menu.add_separator()
+        if here:
+            folder = Path(here[0]["path"]).parent
+            menu.add_command(label="폴더 열기", command=lambda: open_in_os(folder))
+            menu.add_separator()
+            for member in here:
+                label = member["filename"]
+                if member.get("role"):
+                    label = f"[{member['role']}] {label}"
+                menu.add_command(label=_shorten(label, 40),
+                                 command=lambda p=member["path"]: open_in_os(Path(p)))
+        else:
+            menu.add_command(label="파일을 찾지 못했습니다", state="disabled")
         menu.tk_popup(event.x_root, event.y_root)
         return "break"          # 창 전체에 걸린 설정 메뉴가 뒤이어 뜨지 않게 한다
 

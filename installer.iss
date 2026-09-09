@@ -32,7 +32,6 @@ UninstallDisplayName={#AppName}
 
 [Tasks]
 Name: "desktopicon"; Description: "바탕화면에 아이콘 만들기"; GroupDescription: "추가 설정:"
-Name: "startupicon"; Description: "컴퓨터를 켤 때 자동으로 띄우기"; GroupDescription: "추가 설정:"
 
 ; 예전 한글 이름 exe 와 업데이트 찌꺼기를 지운다. 바로가기는 [Icons]가
 ; 어차피 새 exe 를 가리키도록 다시 만든다.
@@ -40,6 +39,14 @@ Name: "startupicon"; Description: "컴퓨터를 켤 때 자동으로 띄우기";
 Type: files; Name: "{app}\{#OldAppExe}"
 Type: files; Name: "{app}\{#OldAppExe}.old"
 Type: files; Name: "{app}\{#AppExe}.old"
+; "컴퓨터를 켤 때 자동으로 띄우기" 는 없앴다. 시작프로그램은 사람마다
+; 사정이 다른데(느린 컴퓨터, 공용 컴퓨터) 설치할 때 무심코 체크했다가
+; 나중에 끄는 길을 못 찾는 일이 있었다. 켜고 싶으면 사용설명서 11절대로
+; 바로가기를 직접 넣으면 된다 — 그쪽이 끄기도 쉽다.
+; 예전 판이 만들어 둔 바로가기는 여기서 치운다.
+Type: files; Name: "{userstartup}\{#AppName}.lnk"
+Type: files; Name: "{userstartup}\공문정리함.lnk"
+Type: files; Name: "{userstartup}\공문정리함.bat"
 
 [Files]
 Source: "dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -54,7 +61,6 @@ Source: "assets\Pretendard-OFL.txt"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{group}\{#AppName} 지우기"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startupicon
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "지금 실행하기"; Flags: nowait postinstall skipifsilent

@@ -15,12 +15,15 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import app  # noqa: E402
+import extract  # noqa: E402
 from store import Store  # noqa: E402
 
 BODY = ("제목\n      파견교사 선발 계획 알림\n\n"
@@ -210,6 +213,165 @@ class Routes(unittest.TestCase):
         _, rev = self.get("/api/rev")
         _, state = self.get("/api/state")
         self.assertEqual(state["rev"], rev["rev"])
+
+
+class PreviewImage(unittest.TestCase):
+    """미리보기를 글자가 아니라 문서 그림으로 보여 준다.
+
+    한글 문서는 저장할 때 첫 쪽 그림을 파일 안에 함께 넣어 둔다(탐색기가
+    쓰는 그 그림이다). 그것을 꺼내 쓰면 표와 서식이 그대로 보인다.
+    따로 깔 것도, 변환할 것도 없다.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.inbox = self.tmp / "공문"
+        self.inbox.mkdir(parents=True)
+        self.store = Store(self.tmp / "t.db")
+        self.server, self.port = app.start_server(self.store, self.inbox,
+                                                  port=9961, base=self.tmp)
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.store.conn.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def raw(self, path: str):
+        url = f"http://127.0.0.1:{self.port}{urllib.parse.quote(path, safe='/?=&')}"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                return response.status, response.headers.get("Content-Type"), response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.headers.get("Content-Type"), exc.read()
+
+    def _hwpx_with_preview(self, name: str, png: bytes) -> Path:
+        """미리보기 그림이 든 최소한의 hwpx 를 만든다."""
+        target = self.inbox / name
+        with zipfile.ZipFile(target, "w") as archive:
+            archive.writestr("Preview/PrvImage.png", png)
+            archive.writestr("Preview/PrvText.txt", "미리보기 글")
+            archive.writestr("Contents/section0.xml",
+                             '<?xml version="1.0"?><hml><p>본문</p></hml>')
+        return target
+
+    def test_hwpx_preview_image_is_served_as_png(self):
+        png = (b"\x89PNG\r\n\x1a\n" + b"\0" * 64)
+        self._hwpx_with_preview("안내.hwpx", png)
+        self.store.scan(self.inbox)
+        doc_id = self.store.all_docs()[0]["id"]
+
+        status, kind, body = self.raw("/api/preview-image?id=" + doc_id)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(kind, "image/png")
+        self.assertEqual(body, png)
+
+    def test_document_without_a_preview_falls_back(self):
+        """그림이 없으면 404 를 주고 화면이 글자 미리보기로 물러난다."""
+        (self.inbox / "그냥.txt").write_text(BODY, encoding="utf-8")
+        self.store.scan(self.inbox)
+        doc_id = self.store.all_docs()[0]["id"]
+
+        status, _, _ = self.raw("/api/preview-image?id=" + doc_id)
+
+        self.assertEqual(status, 404)
+
+    def test_unknown_id_is_not_a_crash(self):
+        status, _, _ = self.raw("/api/preview-image?id=없는아이디")
+        self.assertEqual(status, 404)
+
+    def test_only_pdf_is_handed_over_whole(self):
+        """/api/file 은 PDF 만 넘긴다. 아무 파일이나 읽어 가면 안 된다."""
+        (self.inbox / "그냥.txt").write_text(BODY, encoding="utf-8")
+        self.store.scan(self.inbox)
+        doc_id = self.store.all_docs()[0]["id"]
+
+        status, _, _ = self.raw("/api/file?id=" + doc_id)
+
+        self.assertEqual(status, 404, "PDF 가 아닌 파일을 통째로 내주었습니다")
+
+    def test_extractor_never_raises_on_junk(self):
+        """깨진 파일에 걸려 미리보기가 프로그램을 멈추면 안 된다."""
+        broken = self.inbox / "깨진.hwpx"
+        broken.write_bytes(b"PK\x03\x04" + "이건 zip 이 아니다".encode("utf-8"))
+        self.assertIsNone(extract.preview_image(broken))
+        self.assertIsNone(extract.preview_image(self.inbox / "없는파일.hwp"))
+
+    def test_only_real_images_go_out(self):
+        """그림이 아닌 것을 image/png 라고 내보내면 안 된다."""
+        self._hwpx_with_preview("가짜.hwpx", "이건 PNG 가 아닙니다".encode("utf-8"))
+        self.store.scan(self.inbox)
+        doc_id = self.store.all_docs()[0]["id"]
+        status, _, _ = self.raw("/api/preview-image?id=" + doc_id)
+        self.assertEqual(status, 404)
+
+
+class ArchivingWithoutDates(unittest.TestCase):
+    """기한도 행사일도 없는 문서를 정리해도 인박스에 남으면 안 된다.
+
+    예전에는 파일이 마지막으로 고쳐진 날짜를 봤다. 옮기거나 다시 저장할
+    때마다 이 날짜가 바뀌고, 받은 지 오래된 문서는 이미 지난 달을
+    가리켜 정리를 눌러도 아무 데도 못 가고 그대로 남았다.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.base = self.tmp / "1. 교무기획"
+        self.inbox = self.base / "공문"
+        self.inbox.mkdir(parents=True)
+        self.store = Store(self.tmp / "t.db")
+        self.server, self.port = app.start_server(self.store, self.inbox,
+                                                   port=9951, base=self.base)
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.store.conn.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def get(self, path: str):
+        url = f"http://127.0.0.1:{self.port}{urllib.parse.quote(path, safe='/?=&')}"
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    def test_dateless_document_lands_in_this_months_folder(self):
+        target = self.inbox / "그냥 안내.txt"
+        target.write_text("제목\n      그냥 안내\n\n특별한 날짜는 없습니다.\n",
+                          encoding="utf-8")
+        self.store.scan(self.inbox)
+        doc = self.store.all_docs()[0]
+        self.assertIsNone(doc["deadline"])
+        self.assertIsNone(doc["event_date"])
+        self.store.set_done(doc["id"], True)
+
+        status, state = self.get("/api/archive")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["archived_report"]["no_date"], 0,
+                         "기한이 없다고 정리를 건너뛰었습니다")
+
+        this_month = self.base / f"{date.today().month}월"
+        self.assertTrue(list(this_month.rglob("*.txt")),
+                        "기한 없는 문서가 이번 달 폴더로 가지 않았습니다")
+        self.assertFalse(target.exists(), "인박스에 그대로 남아 있습니다")
+
+    def test_old_file_date_no_longer_sends_it_to_a_past_month(self):
+        """파일 자체의 수정일이 지난 달이어도 오늘 달로 보낸다."""
+        target = self.inbox / "오래된 안내.txt"
+        target.write_text("제목\n      오래된 안내\n\n특별한 날짜는 없습니다.\n",
+                          encoding="utf-8")
+        old = date.today().replace(day=1) - timedelta(days=40)
+        stamp = datetime.combine(old, datetime.min.time()).timestamp()
+        os.utime(target, (stamp, stamp))
+        self.store.scan(self.inbox)
+        doc = self.store.all_docs()[0]
+        self.assertNotEqual(doc["modified"][:7], date.today().isoformat()[:7],
+                            "이 시험은 파일 날짜가 지난 달이어야 뜻이 있습니다")
+        self.store.set_done(doc["id"], True)
+
+        self.get("/api/archive")
+
+        this_month = self.base / f"{date.today().month}월"
+        self.assertTrue(list(this_month.rglob("*.txt")),
+                        "지난 파일 날짜를 따라 지난 달로 보냈습니다")
 
 
 class SurfaceCall(unittest.TestCase):

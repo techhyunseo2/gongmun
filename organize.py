@@ -15,7 +15,10 @@
 
 from __future__ import annotations
 
+import ctypes
+import os
 import re
+import sys
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -125,6 +128,71 @@ def safe_folder_name(title: str) -> str:
     return body.strip(" .")
 
 
+def same_file_content(one: Path, other: Path) -> bool:
+    """두 파일의 내용이 같은지. 크기가 다르면 읽지 않는다."""
+    try:
+        if one.stat().st_size != other.stat().st_size:
+            return False
+        with one.open("rb") as a, other.open("rb") as b:
+            while True:
+                chunk_a, chunk_b = a.read(262144), b.read(262144)
+                if chunk_a != chunk_b:
+                    return False
+                if not chunk_a:
+                    return True
+    except OSError:
+        return False        # 못 읽으면 같다고 우기지 않는다 (지우면 안 되므로)
+
+
+def to_trash(path: Path) -> bool:
+    """휴지통으로 보낸다. 지운 게 아니라 되돌릴 수 있어야 한다.
+
+    같은 파일을 또 받은 것이라 해도 사람이 만든 파일을 프로그램이 영영
+    지워서는 안 된다. 윈도우가 아니거나 실패하면 False 를 돌려주고 부르는
+    쪽이 파일을 그대로 둔다.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        from ctypes import wintypes
+
+        class SHFILEOPSTRUCTW(ctypes.Structure):
+            _fields_ = [("hwnd", wintypes.HWND),
+                        ("wFunc", wintypes.UINT),
+                        ("pFrom", wintypes.LPCWSTR),
+                        ("pTo", wintypes.LPCWSTR),
+                        ("fFlags", ctypes.c_uint16),
+                        ("fAnyOperationsAborted", wintypes.BOOL),
+                        ("hNameMappings", wintypes.LPVOID),
+                        ("lpszProgressTitle", wintypes.LPCWSTR)]
+
+        FO_DELETE = 3
+        FOF_ALLOWUNDO = 0x0040          # 지우지 말고 휴지통으로
+        FOF_NOCONFIRMATION = 0x0010     # 하나씩 물어보지 않는다
+        FOF_SILENT = 0x0004
+        FOF_NOERRORUI = 0x0400
+
+        operation = SHFILEOPSTRUCTW(
+            None, FO_DELETE,
+            str(path.resolve()) + "\0\0", None,
+            FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI,
+            False, None, None)
+        result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+        return result == 0 and not path.exists()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def unique_file(parent: Path, name: str) -> Path:
+    """같은 이름이 있으면 꼬리표를 붙인다. `계획.hwp` → `계획 (2).hwp`"""
+    stem, suffix = Path(name).stem, Path(name).suffix
+    for index in range(2, 100):
+        candidate = parent / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+    return parent / f"{stem} ({os.getpid()}){suffix}"
+
+
 def unique_dir(parent: Path, name: str, hint: str = "") -> Path:
     """같은 이름이 있으면 접수번호를 붙여 구분한다."""
     candidate = parent / (name or "공문")
@@ -187,11 +255,15 @@ def organize(folder: Path, titles: dict[str, str] | None = None,
     titles 에 접수번호별 제목을 넘기면 그것을 폴더 이름으로 쓴다.
     본문에서 읽어 낸 제목이 파일 이름보다 깔끔하기 때문이다.
 
-    파일을 지우지 않는다. 같은 이름이 이미 있으면 건너뛴다.
+    갈 자리에 같은 이름이 이미 있으면 — 같은 공문을 또 내려받은 것이다 —
+    내용을 견줘 본다. 똑같으면 새로 받은 것을 휴지통으로 보내고, 다르면
+    (고쳐 올라온 판) 꼬리표를 붙여 나란히 넣는다. 예전에는 둘 다 아니고
+    그냥 건너뛰어서, 인박스에 남은 파일이 정리를 아무리 눌러도 꿈쩍하지
+    않았다.
     """
     titles = titles or {}
     groups, loose = plan(folder)
-    moved = skipped = 0
+    moved = skipped = trashed = renamed = 0
     made: list[str] = []
     problems: list[str] = []
 
@@ -205,7 +277,18 @@ def organize(folder: Path, titles: dict[str, str] | None = None,
         target = folder / name
         if dry_run:
             made.append(name)
-            moved += len(group.items)
+            # 갈 자리에 같은 이름이 이미 있는지 미리 견줘 둔다. 무엇이
+            # 휴지통으로 가고 무엇이 꼬리표를 달지 눌러 보기 전에 알려야 한다.
+            for item in group.items:
+                landing = target / item.path.name
+                if target.is_dir() and landing.exists():
+                    if same_file_content(item.path, landing):
+                        trashed += 1
+                    else:
+                        renamed += 1
+                        moved += 1
+                else:
+                    moved += 1
             continue
         if target.exists() and not target.is_dir():
             target = unique_dir(folder, name, group.receipt)
@@ -220,7 +303,23 @@ def organize(folder: Path, titles: dict[str, str] | None = None,
         for item in group.items:
             destination = target / item.path.name
             if destination.exists():
-                skipped += 1
+                if same_file_content(item.path, destination):
+                    # 똑같은 것을 또 받았다. 남겨 둬 봐야 헷갈리기만 한다.
+                    if to_trash(item.path):
+                        trashed += 1
+                    else:
+                        skipped += 1
+                        problems.append(f"{item.path.name}: 같은 파일인데 "
+                                        "휴지통으로 보내지 못했습니다")
+                    continue
+                # 이름만 같고 내용이 다르다 — 고쳐 올라온 판이므로 함께 둔다
+                destination = unique_file(target, item.path.name)
+                try:
+                    item.path.rename(destination)
+                    renamed += 1
+                    moved += 1
+                except OSError as exc:
+                    problems.append(f"{item.path.name}: 옮기지 못했습니다 ({exc})")
                 continue
             try:
                 item.path.rename(destination)
@@ -231,6 +330,8 @@ def organize(folder: Path, titles: dict[str, str] | None = None,
     return {
         "moved": moved,
         "skipped": skipped,
+        "trashed": trashed,
+        "renamed": renamed,
         "folders": made,
         "loose": len(loose),
         "problems": problems[:10],

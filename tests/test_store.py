@@ -111,6 +111,69 @@ class Pinning(StoreCase):
         self.store.set_pinned(doc_id, False)
         self.assertFalse(self.store.all_docs()[0]["pinned"])
 
+class Rewritten(StoreCase):
+    """묶음 폴더에 넣어 둔 문서를 고쳐 저장했을 때.
+
+    id 는 내용 해시라 한 번 고쳐 저장할 때마다 새로 생긴다. 자리가 그대로인
+    옛 판을 지우지 않으면 화면에 같은 이름이 두 번 세 번 쌓인다 — 서식을
+    여러 번 손보는 업무에서 목록이 금세 못 볼 것이 됐다.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bundle = self.inbox / "파견교사 선발 계획 알림"
+        self.bundle.mkdir()
+        self.form = self.bundle / "[서식 1] 추천 대상자 명부.txt"
+
+    def _save(self, text: str, day: int = 16) -> None:
+        self.form.write_text(
+            f"제목\n      {text}\n\n2026. 9. {day}.까지 제출바랍니다.\n",
+            encoding="utf-8")
+
+    def test_editing_does_not_pile_up_copies(self):
+        self._save("처음")
+        self.store.scan(self.inbox)
+        for turn in range(3):
+            self._save(f"{turn}차 수정")
+            self.store.scan(self.inbox)
+        names = [d["filename"] for d in self.store.all_docs()]
+        self.assertEqual(names, [self.form.name])
+
+    def test_edit_keeps_marks_and_memo(self):
+        """고쳐 저장했다고 처리 표시와 메모까지 날아가면 안 된다."""
+        self._save("처음")
+        self.store.scan(self.inbox)
+        doc_id = self.store.all_docs()[0]["id"]
+        self.store.set_done(doc_id, True)
+        self.store.set_memo(doc_id, "담당 김선생")
+        self.store.set_category(doc_id, "event")
+        self.store.set_deadline(doc_id, "2026-10-01")
+
+        self._save("고침")
+        self.store.scan(self.inbox)
+        doc = self.store.all_docs()[0]
+        self.assertNotEqual(doc["id"], doc_id)      # 내용이 달라졌으니 새 id
+        self.assertTrue(doc["done"])
+        self.assertEqual(doc["memo"], "담당 김선생")
+        self.assertEqual(doc["category"], "event")
+        self.assertEqual(doc["deadline"], "2026-10-01")
+
+    def test_untouched_deadline_follows_new_content(self):
+        """손대지 않은 기한은 새 내용에서 다시 읽는다."""
+        self._save("처음")
+        self.store.scan(self.inbox)
+        self._save("바뀐 안내", day=30)
+        self.store.scan(self.inbox)
+        self.assertEqual(self.store.all_docs()[0]["deadline"], "2026-09-30")
+
+    def test_copy_elsewhere_still_counts_once(self):
+        """같은 내용을 다른 자리에 두어도 기록은 하나다 (예전 그대로)."""
+        self._save("처음")
+        self.store.scan(self.inbox)
+        (self.inbox / "사본.txt").write_bytes(self.form.read_bytes())
+        self.store.scan(self.inbox)
+        self.assertEqual(len(self.store.all_docs()), 1)
+
 
 class Concurrency(StoreCase):
 

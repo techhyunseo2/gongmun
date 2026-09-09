@@ -310,3 +310,61 @@ def _from_docx(path: Path) -> str:
         elif tag == "t" and element.text:
             out.append(element.text)
     return "".join(out)
+
+
+# ------------------------------------------------------------ 미리보기 그림
+
+# 한글 문서는 저장할 때 첫 쪽 그림을 파일 안에 같이 넣어 둔다. 탐색기가
+# 미리보기에 쓰는 바로 그 그림이다. 이것을 꺼내 쓰면 글자만 뽑아 보여 줄
+# 때와 달리 표·서식이 그대로 보인다. 따로 깔 것도, 변환할 것도 없다.
+PREVIEW_IMAGE = {".hwp", ".hwpx"}
+
+
+def preview_image(path: Path) -> bytes | None:
+    """문서에 들어 있는 첫 쪽 그림(PNG)을 꺼낸다. 없으면 None.
+
+    한글 문서만 해당한다. PDF 는 브라우저가 직접 그리고, 나머지 형식에는
+    이런 그림이 없다.
+    """
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".hwpx":
+            return _hwpx_preview(path)
+        if suffix == ".hwp":
+            return _hwp_preview(path)
+    except Exception:  # noqa: BLE001
+        return None            # 미리보기는 있으면 좋은 것이지 없다고 탈 날 일이 아니다
+    return None
+
+
+def _hwpx_preview(path: Path) -> bytes | None:
+    with zipfile.ZipFile(path) as archive:
+        for name in archive.namelist():
+            if name.lower().startswith("preview/prvimage"):
+                data = archive.read(name)
+                return data if _is_image(data) else None
+    return None
+
+
+def _hwp_preview(path: Path) -> bytes | None:
+    try:
+        import olefile
+    except ImportError:
+        return None
+    if not olefile.isOleFile(str(path)):
+        return None
+    ole = olefile.OleFileIO(str(path))
+    try:
+        if not ole.exists("PrvImage"):
+            return None
+        data = ole.openstream("PrvImage").read()
+        return data if _is_image(data) else None
+    finally:
+        ole.close()
+
+
+def _is_image(data: bytes) -> bool:
+    """PNG·JPEG·BMP 인지 앞머리로 본다. 브라우저가 그릴 수 있는 것만 내보낸다."""
+    return bool(data) and (data[:8] == b"\x89PNG\r\n\x1a\n"
+                           or data[:3] == b"\xff\xd8\xff"
+                           or data[:2] == b"BM")
