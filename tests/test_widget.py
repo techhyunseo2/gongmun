@@ -485,6 +485,98 @@ class RowMenu(unittest.TestCase):
         self.assertIn('Path(m["path"]).exists()', self._block("_row_menu"))
 
 
+class SnappingToEdges(unittest.TestCase):
+    """벽 가까이 끌어다 놓으면 자석처럼 딱 붙는다.
+
+    창 크기 320x400, 작업 영역은 작업 표시줄(아래 40px)을 뺀 범위로 둔다.
+    """
+
+    AREA = (0, 0, 1920, 1040)            # 왼쪽, 위, 오른쪽, 아래
+    SIZE = (320, 400)
+
+    def snap(self, x, y):
+        return widget.snap_to_edge((x, y), self.SIZE, self.AREA)
+
+    def test_near_the_right_wall_it_sticks(self):
+        # 오른쪽 끝은 1920 - 320 = 1600
+        self.assertEqual(self.snap(1595, 300), (1600, 300))
+        self.assertEqual(self.snap(1610, 300), (1600, 300))
+
+    def test_near_the_left_wall_it_sticks(self):
+        self.assertEqual(self.snap(12, 300), (0, 300))
+        self.assertEqual(self.snap(-8, 300), (0, 300))
+
+    def test_away_from_the_wall_it_stays_put(self):
+        """언제나 붙어 버리면 가운데에 두고 싶을 때 성가시다."""
+        self.assertEqual(self.snap(800, 300), (800, 300))
+        # 문턱(20px) 바로 바깥은 손이 가는 대로
+        self.assertEqual(self.snap(21, 300), (21, 300))
+
+    def test_the_top_and_bottom_snap_too(self):
+        self.assertEqual(self.snap(800, 9), (800, 0))
+        # 아래 끝은 1040 - 400 = 640
+        self.assertEqual(self.snap(800, 635), (800, 640))
+
+    def test_a_corner_snaps_on_both_sides_at_once(self):
+        self.assertEqual(self.snap(1608, 12), (1600, 0))
+
+    def test_it_never_hides_under_the_taskbar(self):
+        """작업 영역을 쓰므로 아래에 붙여도 표시줄에 가리지 않는다.
+
+        화면은 1080 이지만 작업 표시줄 40px 을 뺀 1040 이 바닥이다.
+        화면 전체를 기준으로 삼으면 창 아랫부분이 표시줄 뒤로 들어간다.
+        """
+        _, y = self.snap(800, 645)          # 아래 벽에서 5px 떨어진 자리
+        self.assertEqual(y + self.SIZE[1], 1040, "표시줄 위에 서야 합니다")
+        self.assertLess(y + self.SIZE[1], 1080)
+
+    def test_a_monitor_on_the_left_has_negative_coordinates(self):
+        """왼쪽에 붙인 모니터는 좌표가 음수다. 그 모니터의 벽에도 붙어야 한다."""
+        left_screen = (-1920, 0, 0, 1040)
+        self.assertEqual(
+            widget.snap_to_edge((-1912, 300), self.SIZE, left_screen), (-1920, 300))
+        self.assertEqual(
+            widget.snap_to_edge((-330, 300), self.SIZE, left_screen), (-320, 300))
+
+    def test_the_collapsed_widget_snaps_by_its_own_height(self):
+        """접으면 높이가 54 다. 펼쳤을 때 높이로 재면 허공에 뜬다."""
+        _, y = widget.snap_to_edge((800, 980), (320, 54), self.AREA)
+        self.assertEqual(y + 54, 1040)
+
+    def test_the_distance_is_small_enough_to_aim_past(self):
+        self.assertLessEqual(widget.SNAP_DISTANCE, 24,
+                             "너무 넓으면 벽 근처에 자유롭게 둘 수 없습니다")
+
+    def test_dragging_really_goes_through_the_snap(self):
+        """셈만 시험하면 정작 끌 때 안 붙어도 통과한다.
+
+        실제로 이 시험이 없을 때, 붙이는 줄을 통째로 빼도 전부 통과했다.
+        """
+        source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        block = source[source.index("    def _drag_move"):]
+        block = block[:block.index("\n    def ", 10)]
+        self.assertIn("snap_to_edge(where, size, area)", block,
+                      "끌 때 붙이기를 거치지 않습니다")
+        self.assertIn("self._work_area()", block)
+        self.assertIn("winfo_height()", block,
+                      "접었을 때와 펼쳤을 때 높이가 달라 실제로 재야 합니다")
+
+    def test_it_gives_up_quietly_when_the_area_is_unknown(self):
+        """작업 영역을 못 알아내도 창은 끌려야 한다.
+
+        붙이기는 있으면 좋은 것이지, 없다고 창을 못 옮기게 될 일이 아니다.
+        """
+        source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        block = source[source.index("    def _work_area"):]
+        block = block[:block.index("\n    def ", 10)]
+        self.assertIn('sys.platform != "win32"', block)
+        self.assertIn("except Exception", block)
+        self.assertIn("return None", block)
+        drag = source[source.index("    def _drag_move"):]
+        drag = drag[:drag.index("\n    def ", 10)]
+        self.assertIn("if area:", drag, "못 알아냈을 때를 살펴야 합니다")
+
+
 class BringingItBack(unittest.TestCase):
     """가려지거나 화면 밖으로 나간 위젯을 되찾는 길.
 

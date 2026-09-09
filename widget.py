@@ -56,6 +56,7 @@ REFRESH_MINUTES = 10        # 폴더에 새 파일이 들어왔는지 훑는 주
 LIVE_SECONDS = 2.5          # 브라우저에서 고친 게 있는지 보는 주기 (번호만 본다)
 UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시 본다
 OPACITY_MIN = 0.5           # 더 흐려지면 위젯을 찾지 못해 되돌릴 길이 없어진다
+SNAP_DISTANCE = 20          # 벽에 이만큼 다가가면 자석처럼 딱 붙는다
 CLIP_MAX = 12               # 담아 둔 글은 이만큼만 두고 오래된 것부터 밀어낸다
 # 자주 쓰는 문자를 늘어놓을 수 있는 폭. 서랍의 좌우 여백(12씩)을 뺀 만큼이다.
 GLYPH_ROW_WIDTH = WIDTH - 12 * 2
@@ -1013,7 +1014,47 @@ class Widget:
         self._dx, self._dy = event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y()
 
     def _drag_move(self, event):
-        self.root.geometry(f"+{event.x_root - self._dx}+{event.y_root - self._dy}")
+        where = (event.x_root - self._dx, event.y_root - self._dy)
+        size = (self.root.winfo_width(), self.root.winfo_height())
+        area = self._work_area()
+        if area:
+            where = snap_to_edge(where, size, area)
+        self.root.geometry(f"+{where[0]}+{where[1]}")
+
+    def _work_area(self) -> tuple[int, int, int, int] | None:
+        """위젯이 놓인 모니터의 작업 영역 (왼쪽, 위, 오른쪽, 아래).
+
+        화면 전체가 아니라 작업 표시줄을 뺀 범위다. 그래야 아래쪽 벽에
+        붙였을 때 표시줄 뒤로 숨지 않는다. 모니터가 여럿이면 지금 창이
+        올라와 있는 그 모니터를 본다 — 합쳐 놓은 범위를 쓰면 모니터 사이
+        경계에서는 붙지 않고, 바깥 모니터의 벽에만 붙는다.
+
+        알아내지 못하면 None. 부르는 쪽이 붙이기를 건너뛰고 손이 가는
+        대로 둔다. 붙이기는 있으면 좋은 것이지 없다고 탈 날 일이 아니다.
+        """
+        if sys.platform != "win32":
+            return None
+        try:
+            from ctypes import wintypes
+
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", RECT),
+                            ("rcWork", RECT), ("dwFlags", wintypes.DWORD)]
+
+            user32 = ctypes.windll.user32
+            handle = user32.MonitorFromWindow(self.root.winfo_id(), 2)  # NEAREST
+            info = MONITORINFO()
+            info.cbSize = ctypes.sizeof(MONITORINFO)
+            if not user32.GetMonitorInfoW(handle, ctypes.byref(info)):
+                return None
+            work = info.rcWork
+            return work.left, work.top, work.right, work.bottom
+        except Exception:  # noqa: BLE001
+            return None
 
     def _drag_end(self, _event):
         self.config["widget_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
@@ -1481,6 +1522,36 @@ class Widget:
 
     def run(self):
         self.root.mainloop()
+
+
+def snap_to_edge(where: tuple[int, int], size: tuple[int, int],
+                 area: tuple[int, int, int, int],
+                 distance: int = SNAP_DISTANCE) -> tuple[int, int]:
+    """벽 가까이 끌어다 놓으면 딱 맞춰 붙인다. (왼쪽, 위) 를 돌려준다.
+
+    `area` 는 그 창이 놓인 모니터의 작업 영역 (왼쪽, 위, 오른쪽, 아래).
+    화면 전체가 아니라 작업 표시줄을 뺀 범위라, 아래쪽에 붙여도 표시줄에
+    가리지 않는다.
+
+    좌우와 위아래를 따로 본다. 오른쪽 위 모서리처럼 두 벽이 만나는 자리도
+    한 번에 맞는다. 벽에서 멀면 손이 가는 대로 둔다 — 언제나 붙어 버리면
+    가운데에 두고 싶을 때 성가시다.
+    """
+    x, y = where
+    width, height = size
+    left, top, right, bottom = area
+
+    if abs(x - left) <= distance:
+        x = left
+    elif abs((x + width) - right) <= distance:
+        x = right - width
+
+    if abs(y - top) <= distance:
+        y = top
+    elif abs((y + height) - bottom) <= distance:
+        y = bottom - height
+
+    return int(x), int(y)
 
 
 def onto_screen(where: tuple[int, int], bounds: tuple[int, int, int, int],
