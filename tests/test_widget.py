@@ -485,6 +485,82 @@ class RowMenu(unittest.TestCase):
         self.assertIn('Path(m["path"]).exists()', self._block("_row_menu"))
 
 
+class TipStaysOnScreen(unittest.TestCase):
+    """쪽지가 화면 밖으로 나가지 않게 자리를 고른다.
+
+    위젯은 화면 가장자리에 붙여 두는 일이 많다(기본 자리부터 오른쪽
+    위다). 손질이 없으면 잘린 글을 보려고 마우스를 올렸는데 쪽지마저
+    반쯤 잘린 채 뜬다.
+    """
+
+    AREA = (0, 0, 1920, 1032)        # 작업 표시줄을 뺀 범위
+    SIZE = (220, 60)                 # 쪽지 크기
+
+    def test_it_sits_below_when_there_is_room(self):
+        got = widget.fit_tip((800, 400), self.SIZE, self.AREA, above=330)
+        self.assertEqual(got, (800, 400))
+
+    def test_it_flips_above_when_the_bottom_is_tight(self):
+        """아래가 좁으면 글자 위로 넘긴다."""
+        got = widget.fit_tip((800, 1000), self.SIZE, self.AREA, above=900)
+        self.assertEqual(got, (800, 900))
+
+    def test_it_is_pushed_in_from_the_right_wall(self):
+        """위젯을 오른쪽 끝에 붙여 두었을 때가 바로 이 경우다."""
+        x, _ = widget.fit_tip((1850, 400), self.SIZE, self.AREA, above=330)
+        self.assertLessEqual(x + self.SIZE[0], 1920)
+
+    def test_it_is_pushed_in_from_the_left_wall(self):
+        x, _ = widget.fit_tip((-40, 400), self.SIZE, self.AREA, above=330)
+        self.assertGreaterEqual(x, 0)
+
+    def test_it_stays_on_screen_when_both_sides_are_tight(self):
+        """위아래 모두 좁아도 화면 안에는 있어야 한다."""
+        _, y = widget.fit_tip((800, 1020), self.SIZE, self.AREA, above=-30)
+        self.assertGreaterEqual(y, 0)
+        self.assertLessEqual(y + self.SIZE[1], 1032)
+
+    def test_long_text_wraps_instead_of_running_off(self):
+        self.assertLessEqual(widget.TIP_WRAP, widget.WIDTH,
+                             "쪽지가 위젯보다 넓으면 가장자리에서 삐져나옵니다")
+
+
+class PeekOnClippedText(unittest.TestCase):
+    """말줄임표로 잘린 글에만 쪽지를 건다."""
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        block = self.source[self.source.index("    def _peek"):]
+        self.block = block[:block.index("\n    def ", 10)]
+
+    def test_nothing_is_shown_when_the_text_fits(self):
+        """다 보이는 글에 쪽지가 뜨면 가리기만 한다."""
+        self.assertIn('widget._peek_text = "" if full == shown.strip() else full',
+                      self.block)
+
+    def test_it_binds_only_once_per_widget(self):
+        """폴더 줄은 마우스만 올려도 다시 그린다.
+
+        그릴 때마다 걸면 바인딩이 쌓여 쪽지가 여러 번 뜬다.
+        """
+        self.assertIn('if getattr(widget, "_peek_bound", False):', self.block)
+        self.assertIn("widget._peek_bound = True", self.block)
+
+    def test_it_does_not_trample_other_handlers(self):
+        """도구 타일은 이미 <Enter>/<Leave> 로 테두리를 밝힌다."""
+        self.assertEqual(self.block.count('add="+"'), 2)
+
+    def test_every_place_that_cuts_text_is_covered(self):
+        """자르는 자리마다 들여다볼 길이 있어야 한다."""
+        for spot in ("self._peek(cell, text, label)",          # 자주 쓰는 문자
+                     "self._peek(label, text, _one_line(text, 30))",   # 담아 둔 글
+                     "self._peek(w, f\"{name} — {path}\"",      # 도구 타일
+                     "self._peek(name, title, shown)",         # 공문 제목
+                     "self._peek(c, str(self.folder)"):        # 폴더 줄
+            with self.subTest(spot=spot):
+                self.assertIn(spot, self.source)
+
+
 class SnappingToEdges(unittest.TestCase):
     """벽 가까이 끌어다 놓으면 자석처럼 딱 붙는다.
 

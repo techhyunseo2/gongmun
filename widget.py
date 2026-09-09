@@ -57,6 +57,7 @@ LIVE_SECONDS = 2.5          # 브라우저에서 고친 게 있는지 보는 주
 UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시 본다
 OPACITY_MIN = 0.5           # 더 흐려지면 위젯을 찾지 못해 되돌릴 길이 없어진다
 SNAP_DISTANCE = 20          # 벽에 이만큼 다가가면 자석처럼 딱 붙는다
+TIP_WRAP = 260              # 쪽지가 이보다 넓어지면 줄을 바꾼다
 CLIP_MAX = 12               # 담아 둔 글은 이만큼만 두고 오래된 것부터 밀어낸다
 # 자주 쓰는 문자를 늘어놓을 수 있는 폭. 서랍의 좌우 여백(12씩)을 뺀 만큼이다.
 GLYPH_ROW_WIDTH = WIDTH - 12 * 2
@@ -299,6 +300,8 @@ class Widget:
 
     def _tip_schedule(self, widget, text):
         self._tip_cancel()
+        if not text:            # 잘리지 않아 띄울 것이 없는 칸
+            return
         self._tip_after = self.root.after(350, lambda: self._tip_show(widget, text))
 
     def _tip_cancel(self):
@@ -315,13 +318,41 @@ class Widget:
         tip = tk.Toplevel(self.root)
         tip.overrideredirect(True)
         tip.attributes("-topmost", True)
+        # 긴 글은 한 줄로 늘어놓지 않는다. 위젯이 화면 가장자리에 붙어
+        # 있는 일이 많아, 길면 그대로 화면 밖으로 뻗어 나간다.
         tk.Label(tip, text=text, font=self.f_small, bg=INK, fg=CARD,
-                 padx=6, pady=2).pack()
+                 padx=7, pady=3, justify="left", wraplength=TIP_WRAP).pack()
         tip.update_idletasks()
-        x = widget.winfo_rootx() + widget.winfo_width() // 2 - tip.winfo_width() // 2
-        y = widget.winfo_rooty() + widget.winfo_height() + 5
-        tip.geometry(f"+{x}+{y}")
+
+        size = (tip.winfo_width(), tip.winfo_height())
+        under = (widget.winfo_rootx() + widget.winfo_width() // 2 - size[0] // 2,
+                 widget.winfo_rooty() + widget.winfo_height() + 5)
+        area = self._work_area()
+        if area:
+            over = widget.winfo_rooty() - size[1] - 5
+            under = fit_tip(under, size, area, over)
+        tip.geometry(f"+{under[0]}+{under[1]}")
         self._tip = tip
+
+    def _peek(self, widget, full: str, shown: str):
+        """잘려 보이는 글이면 마우스를 올렸을 때 전문을 띄운다.
+
+        잘리지 않았으면 띄우지 않는다 — 다 보이는 글에 쪽지가 뜨면 가리기만
+        한다. 다른 데서 이미 <Enter>/<Leave> 를 쓰고 있을 수 있으므로
+        덮어쓰지 않고 뒤에 덧붙인다.
+
+        같은 칸을 여러 번 다시 그리는 자리(폴더 줄은 마우스만 올려도 다시
+        그린다)가 있으므로, 거는 것은 한 번뿐이고 그다음부터는 글만 바꾼다.
+        쌓아 두면 쪽지가 여러 번 뜨고 바인딩이 계속 늘어난다.
+        """
+        full = " ".join(str(full).split())
+        widget._peek_text = "" if full == shown.strip() else full
+        if getattr(widget, "_peek_bound", False):
+            return
+        widget._peek_bound = True
+        widget.bind("<Enter>",
+                    lambda e, w=widget: self._tip_schedule(w, w._peek_text), add="+")
+        widget.bind("<Leave>", lambda e: self._tip_cancel(), add="+")
 
     def _tip_hide(self):
         if self._tip is not None:
@@ -452,6 +483,7 @@ class Widget:
                           lambda e, t=text, w=cell: self._copy_text(t, w, _one_line(t, 6)))
                 cell.bind("<Enter>", lambda e, w=cell: w.config(highlightbackground=INK))
                 cell.bind("<Leave>", lambda e, w=cell: w.config(highlightbackground=RULE))
+                self._peek(cell, text, label)
             probe.destroy()
         else:
             tk.Label(grid, text="편집을 눌러 ○ ※ ℃ 처럼 자주 쓰는 문자를 넣어 두세요",
@@ -472,6 +504,7 @@ class Widget:
                 label.pack(side="left", fill="x", expand=True, padx=(8, 4), pady=4)
                 label.bind("<Button-1>",
                            lambda e, t=text, w=label: self._copy_text(t, w, _one_line(t, 30)))
+                self._peek(label, text, _one_line(text, 30))
                 drop = tk.Label(line, text="✕", font=self.f_small, bg=CARD, fg=SOFT,
                                 cursor="hand2", padx=7)
                 drop.pack(side="right")
@@ -655,12 +688,15 @@ class Widget:
             top = tk.Label(cell, text=(custom or name[:1] or "▸"),
                            font=self.f_dday, bg=CARD, fg=INK)
         top.pack(pady=(6, 0))
-        tk.Label(cell, text=_one_line(name, 8), font=self.f_small, bg=CARD,
+        shown = _one_line(name, 8)
+        tk.Label(cell, text=shown, font=self.f_small, bg=CARD,
                  fg=SOFT).pack(pady=(0, 6))
         for w in (cell, *cell.winfo_children()):
             w.bind("<Button-1>", lambda e, p=path, c=cell: self._open_tool(p, c))
             w.bind("<Enter>", lambda e, c=cell: self._tool_hi(c, True))
             w.bind("<Leave>", lambda e, c=cell: self._tool_hi(c, False))
+            # 칸이 좁아 별명이 잘린다. 어디로 가는 칸인지도 함께 보여 준다.
+            self._peek(w, f"{name} — {path}" if path else name, shown)
 
     @staticmethod
     def _tool_hi(cell, on):
@@ -870,6 +906,9 @@ class Widget:
         self._folder_text = _fit_text("폴더  " + short, self.f_small, w - 22)
         c.create_text(11, 11, text=self._folder_text, anchor="w",
                       font=self.f_small, fill=INK)
+        # 잘렸으면 전체 경로를 들여다볼 수 있게 한다. 어느 폴더를 읽고
+        # 있는지는 확인할 일이 잦은데, 두 칸만 보여 주므로 자주 잘린다.
+        self._peek(c, str(self.folder), self._folder_text.replace("폴더  ", "", 1))
 
     def show_folder(self):
         """지금 읽고 있는 폴더를 보여 주고, 원하면 바꾸게 한다."""
@@ -1168,8 +1207,11 @@ class Widget:
                  bg=CARD, fg=SOFT).pack(side="right")
 
         title = doc["title"] or doc["filename"]
-        tk.Label(inner, text=_shorten(title, 24), font=self.f_row, bg=CARD, fg=INK,
-                 anchor="w", justify="left").pack(fill="x")
+        shown = _shorten(title, 24)
+        name = tk.Label(inner, text=shown, font=self.f_row, bg=CARD, fg=INK,
+                        anchor="w", justify="left")
+        name.pack(fill="x")
+        self._peek(name, title, shown)
 
         for target in (frame, inner, top) + tuple(inner.winfo_children()) + tuple(top.winfo_children()):
             target.bind("<Button-1>", self.open_browser)
@@ -1522,6 +1564,28 @@ class Widget:
 
     def run(self):
         self.root.mainloop()
+
+
+def fit_tip(where: tuple[int, int], size: tuple[int, int],
+            area: tuple[int, int, int, int], above: int,
+            edge: int = 6) -> tuple[int, int]:
+    """쪽지가 화면 밖으로 나가지 않게 자리를 고른다. (왼쪽, 위) 를 돌려준다.
+
+    `where` 는 글자 바로 아래에 놓았을 때의 자리, `above` 는 위로 넘겼을
+    때의 y. 아래가 좁으면 위로 넘기고, 위도 좁으면 화면 안으로 밀어 넣는다.
+    좌우도 같은 식이다. 위젯은 화면 가장자리에 붙여 두는 일이 많아서,
+    이 손질이 없으면 쪽지가 반쯤 잘린 채 뜬다.
+    """
+    x, y = where
+    width, height = size
+    left, top, right, bottom = area
+
+    if y + height > bottom - edge:
+        y = above if above >= top + edge else max(top + edge, bottom - edge - height)
+
+    x = min(x, right - edge - width)
+    x = max(x, left + edge)
+    return int(x), int(y)
 
 
 def snap_to_edge(where: tuple[int, int], size: tuple[int, int],

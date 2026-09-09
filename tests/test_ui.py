@@ -113,6 +113,193 @@ class DocumentPreview(unittest.TestCase):
                       "한 쪽만 보인다는 것을 알려야 합니다")
 
 
+class PeekAtClippedText(unittest.TestCase):
+    """자리가 모자라 잘린 글은 전문을 볼 길이 있어야 한다.
+
+    브라우저 기본 title 풍선을 쓰지 않는다 — 뜨기까지 1초 넘게 걸리고,
+    화면 끝에서 잘리며, 어디에 뜰지 우리가 정할 수 없다.
+    """
+
+    def test_there_is_a_place_to_show_it(self):
+        self.assertIn('id="peek"', HTML)
+        self.assertIn('role="tooltip"', HTML)
+
+    def test_hidden_actually_hides_it(self):
+        self.assertIn("#peek[hidden]{display:none}", HTML)
+
+    def test_it_flips_up_when_the_bottom_is_tight(self):
+        self.assertIn("if (top + size.height > room.h - PEEK_EDGE)", HTML)
+        self.assertIn("const above = box.top - size.height - PEEK_GAP", HTML)
+
+    def test_it_is_pushed_in_from_the_right_and_left(self):
+        self.assertIn("if (left + size.width > room.w - PEEK_EDGE)", HTML)
+        self.assertIn("if (left < PEEK_EDGE) left = PEEK_EDGE", HTML)
+
+    def test_it_only_shows_when_the_text_is_really_cut(self):
+        """다 보이는 글에 쪽지가 뜨면 가리기만 한다."""
+        self.assertIn("function _isClipped", HTML)
+        self.assertIn("el.scrollWidth > el.clientWidth + 1", HTML)
+        self.assertIn("if (_isClipped(el)) showPeek(el)", HTML)
+
+    def test_text_we_cut_ourselves_is_compared_by_the_full_value(self):
+        """CSS 가 자른 것과 우리가 잘라 넣은 것은 재는 법이 다르다."""
+        self.assertIn("if (el.dataset.full) return el.dataset.full !== el.textContent", HTML)
+
+    def test_every_clipped_spot_is_marked(self):
+        for spot in ('class="folder" id="folder" data-peek',      # 폴더 줄
+                     'class="name" data-peek',                    # 공문 제목
+                     'class="meta" data-peek data-full=',         # 기관·파일 이름
+                     'class="nm" data-peek'):                     # 딸린 문서
+            with self.subTest(spot=spot):
+                self.assertIn(spot, HTML)
+
+    def test_it_goes_away_when_the_page_scrolls(self):
+        """스크롤하면 쪽지만 제자리에 남아 엉뚱한 곳을 가리킨다."""
+        self.assertIn('window.addEventListener("scroll", hidePeek, true)', HTML)
+
+    def test_keyboard_users_get_it_too(self):
+        self.assertIn('document.addEventListener("focusin"', HTML)
+
+
+class KindBadge(unittest.TestCase):
+    """유형표를 왼쪽 세로줄과 같은 색의 작은 라운드 박스로."""
+
+    def test_it_takes_the_same_colour_as_the_left_rule(self):
+        self.assertIn("const tone = CAT_COLOR[doc.category]", HTML)
+        self.assertIn('style="border-left-color:${tone}"', HTML)
+        self.assertIn('style="--kind-ink:${tone}"', HTML)
+
+    def test_it_is_a_rounded_box(self):
+        kind = HTML[HTML.index("  .kind{"):]
+        kind = kind[:kind.index("}")]
+        self.assertIn("border-radius:999px", kind)
+        self.assertIn("padding:", kind)
+        self.assertIn("border:1px solid", kind)
+
+    def test_the_type_is_still_written_out(self):
+        """색만으로 뜻을 전하면 색을 구별하기 어려운 분이 읽지 못한다."""
+        self.assertIn('<span class="kind" style="--kind-ink:${tone}">${cats[doc.category]}</span>',
+                      HTML)
+
+    def test_there_is_a_fallback_where_color_mix_is_unknown(self):
+        self.assertIn("@supports not (background: color-mix", HTML)
+
+
+class DoneFromTheList(unittest.TestCase):
+    """목록에서 바로 처리하는 단추."""
+
+    def test_the_button_is_there(self):
+        self.assertIn('class="done-btn"', HTML)
+        self.assertIn('aria-pressed="${doc.done}"', HTML)
+
+    def test_clicking_it_does_not_open_the_preview(self):
+        """줄 전체가 미리보기를 여는 단추다. 막지 않으면 같이 열린다."""
+        block = HTML[HTML.index('list.querySelectorAll(".done-btn")'):]
+        block = block[:block.index("_bindPickedBar")]
+        self.assertIn("event.stopPropagation()", block)
+
+    def test_it_toggles_both_ways(self):
+        block = HTML[HTML.index('list.querySelectorAll(".done-btn")'):]
+        block = block[:block.index("_bindPickedBar")]
+        self.assertIn("const was = doc.done", block)
+        self.assertIn("done: !was", block)
+
+    def test_the_whole_bundle_moves_together(self):
+        """본문만 처리하고 첨부가 남으면 목록에 반쪽이 떠 있게 된다."""
+        block = HTML[HTML.index('list.querySelectorAll(".done-btn")'):]
+        block = block[:block.index("_bindPickedBar")]
+        self.assertIn("const members = (doc.members || []).map(m => m.id)", block)
+        self.assertIn("members});", block)
+
+    def test_it_can_be_pressed_by_keyboard(self):
+        block = HTML[HTML.index('list.querySelectorAll(".done-btn")'):]
+        block = block[:block.index("_bindPickedBar")]
+        self.assertIn("el.onkeydown", block)
+
+    def test_the_badge_and_button_have_fixed_lanes(self):
+        """글자 수가 달라도 세로줄이 맞아야 목록이 정돈돼 보인다."""
+        row = HTML[HTML.index("  .row{"):]
+        row = row[:row.index("}")]
+        self.assertIn("grid-template-columns:20px 58px 1fr 74px 30px", row)
+
+
+class UndoingAMistake(unittest.TestCase):
+    """실수로 처리 단추를 눌렀을 때 되돌아오는 길.
+
+    예전에는 "처리한 것도 보기" 를 켜고, 목록에서 그 공문을 다시 찾고,
+    열어서 맨 아래 단추를 눌러야 했다. 되돌릴 자리는 실수한 바로 그
+    자리여야 한다 — 알림에 되돌리기를 함께 단다.
+    """
+
+    def _block(self, start, end):
+        body = HTML[HTML.index(start):]
+        return body[:body.index(end)]
+
+    def test_the_toast_can_carry_an_undo(self):
+        self.assertIn("function toast(text, undo)", HTML)
+        self.assertIn('btn.className = "undo"', HTML)
+
+    def test_it_waits_longer_when_there_is_something_to_undo(self):
+        """2.2초는 실수를 알아채고 누르기에 짧다."""
+        self.assertIn("undo ? 7000 : 2200", HTML)
+
+    def test_the_toast_only_catches_clicks_when_it_has_a_button(self):
+        """평소에는 알림이 클릭을 가로채면 뒤에 있는 목록을 못 쓴다."""
+        self.assertIn("#toast{", HTML)
+        toast = self._block("  #toast{", "}")
+        self.assertIn("pointer-events:none", toast)
+        self.assertIn("#toast.actionable{pointer-events:auto}", HTML)
+
+    def test_ctrl_z_does_the_same(self):
+        self.assertIn('e.key.toLowerCase() === "z" && _undo', HTML)
+        self.assertIn("runUndo()", HTML)
+
+    def test_typing_is_not_hijacked(self):
+        """검색칸에서 Ctrl+Z 는 글자를 되돌리는 것이어야 한다."""
+        self.assertIn('e.target.matches("input, textarea")', HTML)
+
+    def test_undo_runs_only_once(self):
+        """두 번 눌러 도로 처리해 버리면 더 헷갈린다."""
+        run = self._block("async function runUndo()", "\n}")
+        self.assertIn("_undo = null;", run)
+
+    def test_every_way_of_marking_done_can_be_undone(self):
+        for spot, tag in (('list.querySelectorAll(".done-btn")', "목록 단추"),
+                          ('$("toggledone").onclick', "미리보기 단추"),
+                          ("go.onclick = async () =>", "여러 건 한꺼번에")):
+            with self.subTest(tag=tag):
+                block = HTML[HTML.index(spot):]
+                block = block[:block.index("render();") + 400]
+                self.assertIn("async () => {", block, f"{tag}에 되돌리기가 없습니다")
+
+    def test_the_shortcut_is_written_on_the_button(self):
+        """단축키는 알려 주지 않으면 아무도 모른다."""
+        self.assertIn("Ctrl+Z", HTML)
+
+
+class BandPickButton(unittest.TestCase):
+    """구간마다 있는 고르기 단추 — 링크가 아니라 단추로 보이게."""
+
+    def test_it_no_longer_looks_like_a_link(self):
+        band = HTML[HTML.index("  .bandpick{"):]
+        band = band[:band.index("}")]
+        self.assertNotIn("border-bottom:1px dashed", band,
+                         "점선 밑줄이면 링크처럼 보여 눌러 볼 생각을 못 합니다")
+        self.assertIn("border:1px solid", band)
+        self.assertIn("border-radius:999px", band)
+
+    def test_period_bands_say_period(self):
+        self.assertIn('"모두 해제" : "이 기간 모두"', HTML)
+
+    def test_pinned_and_done_are_not_periods(self):
+        """고정·처리함은 기간이 아니다. 기간이라 하면 틀린 말이 된다."""
+        self.assertIn('"모두 해제" : "이 구간 모두"', HTML)
+
+    def test_it_shows_whether_it_is_on(self):
+        self.assertIn('aria-pressed="${allPicked}"', HTML)
+        self.assertIn('.bandpick[aria-pressed="true"]', HTML)
+
+
 class ZoomingThePreview(unittest.TestCase):
     """미리보기 그림을 눌러 크게 보기.
 
