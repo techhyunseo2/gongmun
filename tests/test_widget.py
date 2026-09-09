@@ -525,6 +525,80 @@ class TipStaysOnScreen(unittest.TestCase):
                              "쪽지가 위젯보다 넓으면 가장자리에서 삐져나옵니다")
 
 
+class ClipRowKeepsItsButtons(unittest.TestCase):
+    """담아 둔 글이 길어도 오른쪽 단추가 밀려나지 않아야 한다.
+
+    실사용에서 걸리셨다. 긴 글을 담아 두면 말줄임표가 붙은 글이 순서
+    바꾸기(▴▾)와 지우기(✕)를 칸 밖으로 밀어내, 그 글을 지울 수가 없었다.
+    원인이 둘이었다 — pack 순서(먼저 붙인 것이 공간을 먼저 가져간다)와,
+    글자 수로 자른 것(한글은 영문보다 두 배 가까이 넓다).
+    """
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+        block = self.source[self.source.index('tk.Label(q, text="담아 둔 글"'):]
+        self.block = block[:block.index("다른 곳에서 복사한 뒤")]
+
+    def test_the_buttons_are_packed_first(self):
+        """글을 먼저 붙이면 긴 글이 단추를 밖으로 밀어낸다."""
+        for mark in ('drop.pack(side="right")', 'down.pack(side="right")',
+                     'up.pack(side="right")'):
+            with self.subTest(mark=mark):
+                self.assertLess(self.block.index(mark),
+                                self.block.index('label.pack(side="left"'),
+                                "단추를 글보다 먼저 붙여야 자리를 지킵니다")
+
+    def test_the_text_is_cut_by_pixels_not_letters(self):
+        self.assertIn("_fit_text(", self.block)
+        self.assertNotIn("_one_line(text, 30)", self.block,
+                         "글자 수로 자르면 한글이 든 글은 칸을 넘어섭니다")
+
+    def test_the_button_width_is_measured(self):
+        self.assertIn("self._clip_controls_width(box)", self.block)
+        gauge = self.source[self.source.index("    def _clip_controls_width"):]
+        gauge = gauge[:gauge.index("\n    def ", 10)]
+        self.assertIn("gauge.update_idletasks()", gauge,
+                      "재우지 않으면 요청 폭이 1px 로 나온다")
+        self.assertIn("gauge.destroy()", gauge)
+
+    def test_the_room_follows_the_widget_width(self):
+        self.assertIn("CLIP_TEXT_WIDTH = WIDTH - 12 * 2 - 2 - 12", self.source)
+
+    def test_long_text_really_fits_beside_the_buttons(self):
+        """실제로 재 본다. 소스만 훑으면 셈이 틀린 것은 못 잡는다."""
+        import tkinter as tk
+
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(f"화면이 없습니다: {exc}")
+        root.withdraw()
+        try:
+            from tkinter import font as tkfont
+            f_small = tkfont.Font(family="맑은 고딕", size=8)
+            box = tk.Frame(root)
+
+            class Borrow:
+                pass
+            borrow = Borrow()
+            borrow.f_small = f_small
+            controls = widget.Widget._clip_controls_width(borrow, box)
+            self.assertGreater(controls, 20, "단추 폭이 1px 로 나오고 있습니다")
+            room = widget.CLIP_TEXT_WIDTH - controls
+
+            for text in ("짧은 글",
+                         "2026학년도 1학기 방과후학교 운영 계획 및 강사 채용 공고 안내 말씀드립니다",
+                         "부산광역시교육청 교원인사과-12345 (본문) 2026학년도 하반기 운영 계획",
+                         "a" * 80):
+                with self.subTest(text=text[:16]):
+                    shown = widget._fit_text(" ".join(text.split()), f_small, room)
+                    self.assertLessEqual(
+                        f_small.measure(shown), room,
+                        "글이 단추 자리까지 넘어갑니다 — 지울 수가 없어집니다")
+        finally:
+            root.destroy()
+
+
 class PeekOnClippedText(unittest.TestCase):
     """말줄임표로 잘린 글에만 쪽지를 건다."""
 
@@ -553,7 +627,7 @@ class PeekOnClippedText(unittest.TestCase):
     def test_every_place_that_cuts_text_is_covered(self):
         """자르는 자리마다 들여다볼 길이 있어야 한다."""
         for spot in ("self._peek(cell, text, label)",          # 자주 쓰는 문자
-                     "self._peek(label, text, _one_line(text, 30))",   # 담아 둔 글
+                     "self._peek(label, text, shown)",         # 담아 둔 글
                      "self._peek(w, f\"{name} — {path}\"",      # 도구 타일
                      "self._peek(name, title, shown)",         # 공문 제목
                      "self._peek(c, str(self.folder)"):        # 폴더 줄

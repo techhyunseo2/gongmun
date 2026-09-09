@@ -63,6 +63,9 @@ CLIP_MAX = 12               # 담아 둔 글은 이만큼만 두고 오래된 �
 GLYPH_ROW_WIDTH = WIDTH - 12 * 2
 GLYPH_GAP = 4              # 칸과 칸 사이. 이만큼도 줄 폭에 넣어 세야 한다
 GLYPH_MAX = 40              # 고정해 둘 특수문자·문구 개수 상한
+# 담아 둔 글에서 글이 쓸 수 있는 폭. 서랍 여백(12씩)·테두리·안쪽
+# 여백(8+4)을 뺀 만큼이며, 여기서 다시 오른쪽 단추 폭을 뺀다.
+CLIP_TEXT_WIDTH = WIDTH - 12 * 2 - 2 - 12
 TOOL_MAX = 18              # 도구 서랍에 등록해 둘 프로그램·폴더·파일 개수 상한
 
 # 결재 전후 비교 서랍의 안내 문구. 사용자가 그대로 정한 것 — 다듬지 말 것.
@@ -496,15 +499,15 @@ class Widget:
         if clips:
             box = tk.Frame(q, bg=PAPER)
             box.pack(fill="x", padx=12)
+            # 오른쪽 단추 셋이 차지하는 폭을 한 번만 실제로 재 둔다.
+            room = CLIP_TEXT_WIDTH - self._clip_controls_width(box)
             for i, text in enumerate(clips):
                 line = tk.Frame(box, bg=CARD, highlightbackground=RULE, highlightthickness=1)
                 line.pack(fill="x", pady=2)
-                label = tk.Label(line, text=_one_line(text, 30), font=self.f_small, bg=CARD,
-                                 fg=INK, anchor="w", cursor="hand2")
-                label.pack(side="left", fill="x", expand=True, padx=(8, 4), pady=4)
-                label.bind("<Button-1>",
-                           lambda e, t=text, w=label: self._copy_text(t, w, _one_line(t, 30)))
-                self._peek(label, text, _one_line(text, 30))
+
+                # 단추부터 자리를 잡는다. pack 은 먼저 붙인 것에 공간을 먼저
+                # 주기 때문에, 글을 앞에 붙이면 긴 글이 단추를 밖으로 밀어내
+                # 지우거나 자리를 옮길 수가 없었다.
                 drop = tk.Label(line, text="✕", font=self.f_small, bg=CARD, fg=SOFT,
                                 cursor="hand2", padx=7)
                 drop.pack(side="right")
@@ -518,6 +521,16 @@ class Widget:
                               cursor="hand2", padx=2)
                 up.pack(side="right")
                 up.bind("<Button-1>", lambda e, t=text: self._move_clip(t, -1))
+
+                # 글자 수가 아니라 픽셀로 잰다. 한글은 영문보다 두 배 가까이
+                # 넓어, 서른 글자로 자르면 한글이 든 글은 칸을 넘어섰다.
+                shown = _fit_text(" ".join(text.split()), self.f_small, room)
+                label = tk.Label(line, text=shown, font=self.f_small, bg=CARD,
+                                 fg=INK, anchor="w", cursor="hand2")
+                label.pack(side="left", fill="x", expand=True, padx=(8, 4), pady=4)
+                label.bind("<Button-1>",
+                           lambda e, t=text, w=label, s=shown: self._copy_text(t, w, s))
+                self._peek(label, text, shown)
         else:
             tk.Label(q, text="다른 곳에서 복사한 뒤 아래 단추를 누르면 여기 담깁니다",
                      font=self.f_small, bg=PAPER, fg=SOFT, anchor="w",
@@ -530,6 +543,24 @@ class Widget:
         self.btn_stash.pack(side="left")
         if clips:
             self._foot_button(bar, "비우기", lambda e=None: self._clear_clips()).pack(side="right")
+
+    def _clip_controls_width(self, parent) -> int:
+        """담아 둔 글 오른쪽의 단추 셋(▴ ▾ ✕)이 차지하는 폭.
+
+        숫자로 적어 두면 글꼴이나 화면 배율이 다른 컴퓨터에서 어긋난다.
+        같은 차림으로 한 줄 만들어 재 보고 곧 치운다.
+        """
+        gauge = tk.Frame(parent, bg=CARD)
+        for mark, pad in (("✕", 7), ("▾", 2), ("▴", 2)):
+            tk.Label(gauge, text=mark, font=self.f_small, bg=CARD,
+                     padx=pad).pack(side="left")
+        # 칸 하나와 달리 여러 칸을 담은 틀은 붙이고 나서 한 번 재우지 않으면
+        # 요청 폭이 1px 로 나온다. 그대로 쓰면 자리가 남는 줄 알고 글을
+        # 길게 넣어, 고치려던 그 밀림이 그대로 난다.
+        gauge.update_idletasks()
+        width = gauge.winfo_reqwidth()
+        gauge.destroy()
+        return width
 
     def _copy_text(self, text: str, widget=None, restore: str | None = None):
         """문자나 담아 둔 글을 클립보드에 넣는다. 붙여넣기는 사용자가 한다.
