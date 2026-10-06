@@ -61,6 +61,9 @@ UPDATE_GAP_HOURS = 4        # 이만큼 지나면 새 버전이 있는지 다시
 OPACITY_MIN = 0.5           # 더 흐려지면 위젯을 찾지 못해 되돌릴 길이 없어진다
 SNAP_DISTANCE = 20          # 벽에 이만큼 다가가면 자석처럼 딱 붙는다
 TIP_WRAP = 260              # 쪽지가 이보다 넓어지면 줄을 바꾼다
+SCROLL_BAR = 6              # 내용 위에 얹는 굴림 막대 폭. 오른쪽 여백(8) 안에 든다
+SCROLL_STEP = 24            # 휠 한 칸에 내려가는 거리 (공문 한 줄 남짓)
+BODY_MIN = 160              # 창이 화면 아래쪽에 있어도 이만큼은 보여 준다
 CLIP_MAX = 12               # 담아 둔 글은 이만큼만 두고 오래된 것부터 밀어낸다
 # 자주 쓰는 문자를 늘어놓을 수 있는 폭. 서랍의 좌우 여백(12씩)을 뺀 만큼이다.
 GLYPH_ROW_WIDTH = WIDTH - 12 * 2
@@ -178,9 +181,33 @@ class Widget:
                                          active=bool(self.config.get("on_top", True)))
         self.btn_top.pack(side="right", padx=(6, 0))
 
-        # 접으면 머리말만 남기고 이 아래가 통째로 사라진다
-        self.shell = tk.Frame(outer, bg=PAPER)
-        self.shell.pack(fill="both", expand=True)
+        # 접으면 머리말만 남기고 이 아래가 통째로 사라진다.
+        #
+        # 서랍을 여럿 열거나 링크를 많이 넣으면 화면보다 길어져 아래가
+        # 잘렸다. 머리말은 그 자리에 두고 이 아래만 캔버스에 얹어 굴려
+        # 본다. 창 높이는 화면 아래 끝까지만 늘린다(_fit_height).
+        self.viewport = tk.Frame(outer, bg=PAPER)
+        self.viewport.pack(fill="both", expand=True)
+        self.scroller = tk.Canvas(self.viewport, bg=PAPER, highlightthickness=0, bd=0,
+                                  height=1, yscrollincrement=SCROLL_STEP)
+        self.scroller.pack(fill="both", expand=True)
+        self.shell = tk.Frame(self.scroller, bg=PAPER)
+        self._shell_item = self.scroller.create_window(0, 0, window=self.shell, anchor="nw")
+        self.scroller.bind("<Configure>", lambda e: self.scroller.itemconfigure(
+            self._shell_item, width=e.width))
+        self.shell.bind("<Configure>", lambda e: self.scroller.configure(
+            scrollregion=(0, 0, e.width, e.height)))
+        # 굴림 막대는 옆에 자리를 내지 않고 내용 오른쪽 여백 위에 얇게
+        # 얹는다. 폭을 빼앗으면 픽셀로 재서 맞춘 글(담아 둔 글·링크 별명)이
+        # 다시 넘친다. 넘칠 때만 보인다.
+        self._scroll_span = (0.0, 1.0)
+        self.scrollbar = tk.Canvas(self.viewport, width=SCROLL_BAR, bg=PAPER,
+                                   highlightthickness=0, bd=0, cursor="hand2")
+        self.scrollbar.bind("<Configure>", lambda e: self._paint_scrollbar())
+        self.scrollbar.bind("<Button-1>", self._scroll_grab)
+        self.scrollbar.bind("<B1-Motion>", self._scroll_drag)
+        self.scroller.configure(yscrollcommand=self._scroll_moved)
+        self.root.bind_all("<MouseWheel>", self._on_wheel, add="+")
 
         # 한 줄에: 투명도 슬라이더(절반) + 남은 자리를 폴더 경로 박스가 채운다.
         # 폴더 박스는 눌러서 경로 확인·열기·바꾸기를 할 수 있고, 칸에 안
@@ -1363,12 +1390,91 @@ class Widget:
             pass
 
     def _fit_height(self):
-        """내용을 다 그린 뒤 실제 필요한 높이로 창을 맞춘다."""
+        """내용을 다 그린 뒤 실제 필요한 높이로 창을 맞춘다.
+
+        화면 아래 끝(작업 표시줄 위)을 넘으면 거기까지만 늘리고 나머지는
+        굴려서 본다. 예전에는 화면 높이로만 잘라, 창이 화면 가운데쯤
+        있으면 아래 서랍이 화면 밖으로 나가 닿을 길이 없었다.
+        """
         if self.collapsed:
             return
         self.root.update_idletasks()
-        height = min(self.root.winfo_reqheight(), self.root.winfo_screenheight() - 120)
-        self.root.geometry(f"{WIDTH}x{height}+{self.root.winfo_x()}+{self.root.winfo_y()}")
+        need = self.shell.winfo_reqheight()
+        # 머리말·테두리처럼 굴리지 않는 부분의 높이
+        chrome = self.root.winfo_reqheight() - self.scroller.winfo_reqheight()
+        y = self.root.winfo_y()
+        area = self._work_area()
+        bottom = area[3] if area else self.root.winfo_screenheight() - 40
+        room = max(BODY_MIN, bottom - y - chrome)
+        body = max(1, min(need, room))
+        self.scroller.configure(height=body)
+        self.root.geometry(f"{WIDTH}x{chrome + body}+{self.root.winfo_x()}+{y}")
+        # 내용이 줄었으면 빈 아래쪽을 보고 있지 않도록 제자리로 당긴다
+        self.root.update_idletasks()
+        self.scroller.yview_moveto(self._scroll_span[0])
+
+    # ------------------------------------------------------------- 굴리기
+
+    def _overflowing(self) -> bool:
+        first, last = self._scroll_span
+        return last - first < 0.999
+
+    def _scroll_moved(self, first, last):
+        """캔버스가 보는 자리가 바뀔 때마다 불린다. 막대를 다시 그린다."""
+        self._scroll_span = (float(first), float(last))
+        self._paint_scrollbar()
+
+    def _paint_scrollbar(self):
+        bar = self.scrollbar
+        if not self._overflowing():
+            bar.place_forget()
+            return
+        if not bar.winfo_ismapped():
+            bar.place(relx=1.0, x=-1, y=0, relheight=1.0, anchor="ne")
+        bar.delete("all")
+        height = bar.winfo_height()
+        if height <= 1:                    # 막 붙여 아직 크기가 없을 때
+            height = self.scroller.winfo_height()
+        first, last = self._scroll_span
+        top = first * height
+        # 내용이 아주 길어도 손잡이는 잡을 만한 크기로 남긴다
+        bottom = max(last * height, top + 28)
+        if bottom > height:
+            top, bottom = max(0, height - (bottom - top)), height
+        mid = SCROLL_BAR / 2
+        bar.create_line(mid, top + mid, mid, bottom - mid, fill=SOFT,
+                        width=SCROLL_BAR - 2, capstyle="round")
+
+    def _scroll_grab(self, event):
+        """손잡이를 잡으면 그대로 끌고, 빈 곳을 누르면 그 자리로 건너뛴다."""
+        height = max(1, self.scrollbar.winfo_height())
+        first, last = self._scroll_span
+        if not first * height <= event.y <= last * height:
+            self.scroller.yview_moveto(event.y / height - (last - first) / 2)
+            first = self._scroll_span[0]
+        self._grab = (event.y, first)
+
+    def _scroll_drag(self, event):
+        start_y, start_first = getattr(self, "_grab", (event.y, self._scroll_span[0]))
+        height = max(1, self.scrollbar.winfo_height())
+        self.scroller.yview_moveto(start_first + (event.y - start_y) / height)
+
+    def _on_wheel(self, event):
+        """위젯 안 어디에 마우스가 있든 휠로 굴린다.
+
+        bind_all 이라 다른 창(편집 창 같은)에서 굴려도 여기로 온다. 그 창의
+        글상자는 저대로 굴러야 하므로, 이 창 위에서 굴린 것만 받는다.
+        """
+        try:
+            if event.widget.winfo_toplevel() is not self.root:
+                return
+        except (AttributeError, KeyError, tk.TclError):
+            return
+        if self.collapsed or not self._overflowing():
+            return
+        self._tip_cancel()                 # 굴리는 동안 쪽지가 엉뚱한 자리에 남는다
+        steps = -int(event.delta / 120) or (-1 if event.delta > 0 else 1)
+        self.scroller.yview_scroll(steps, "units")
 
     def _bind(self):
         # 머리말의 빈 자리와 요약줄을 끌면 창이 움직인다. 아이콘 단추는
@@ -1436,6 +1542,8 @@ class Widget:
     def _drag_end(self, _event):
         self.config["widget_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
         save_config(self.config)
+        # 화면 아래 끝까지 남은 자리가 달라졌다. 위로 올리면 더 길게 펴진다.
+        self._fit_height()
 
     # ------------------------------------------------------------- 갱신
 
@@ -1600,11 +1708,11 @@ class Widget:
     def toggle_fold(self):
         self.collapsed = not self.collapsed
         if self.collapsed:
-            self.shell.pack_forget()
+            self.viewport.pack_forget()
             self.root.geometry(f"{WIDTH}x54")
             self.btn_fold.config(text="□")
         else:
-            self.shell.pack(fill="both", expand=True)
+            self.viewport.pack(fill="both", expand=True)
             self.btn_fold.config(text="—")
             self._render_drawers()
             self._draw_opacity_slider()

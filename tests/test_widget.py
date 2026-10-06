@@ -366,6 +366,50 @@ class LinkDrawer(unittest.TestCase):
         self.assertIn("_fit_text(name, self.f_row, room)", block)
 
 
+class ScrollingBody(unittest.TestCase):
+    """서랍을 여럿 열거나 링크가 많으면 아래가 잘렸다. 굴려서 끝까지 본다."""
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+
+    def _block(self, name):
+        block = self.source[self.source.index(f"def {name}"):]
+        return block[:block.index("\n    def ", 10)]
+
+    def test_everything_under_the_header_sits_on_a_canvas(self):
+        build = self._block("_build")
+        self.assertIn("self.shell = tk.Frame(self.scroller", build)
+        self.assertIn("create_window(0, 0, window=self.shell", build)
+        # 머리말은 굴러가지 않는다 — 끌기와 아이콘이 늘 손에 닿아야 한다
+        self.assertIn("self.head = tk.Frame(outer", build)
+
+    def test_height_stops_at_the_bottom_of_the_work_area(self):
+        """화면 높이로만 자르면 창이 가운데 있을 때 아래가 화면 밖으로 나간다."""
+        block = self._block("_fit_height")
+        self.assertIn("self._work_area()", block)
+        self.assertIn("bottom - y - chrome", block)
+        self.assertIn("min(need, room)", block)
+
+    def test_the_bar_does_not_steal_width(self):
+        """폭을 빼앗으면 픽셀로 맞춘 글이 다시 넘친다. 위에 얹기만 한다."""
+        self.assertIn('bar.place(relx=1.0', self._block("_paint_scrollbar"))
+        self.assertLessEqual(widget.SCROLL_BAR, 8, "오른쪽 여백(8) 안에 들어야 한다")
+
+    def test_the_wheel_only_scrolls_this_window(self):
+        """편집 창의 글상자는 저대로 굴러야 한다."""
+        block = self._block("_on_wheel")
+        self.assertIn("winfo_toplevel() is not self.root", block)
+        self.assertIn("not self._overflowing()", block)
+
+    def test_folding_hides_the_scrolling_part(self):
+        block = self._block("toggle_fold")
+        self.assertIn("self.viewport.pack_forget()", block)
+
+    def test_moving_the_widget_refits_it(self):
+        """위로 올리면 남은 자리가 늘어 더 길게 펴져야 한다."""
+        self.assertIn("self._fit_height()", self._block("_drag_end"))
+
+
 class CompareDrawer(unittest.TestCase):
     """결재 전후 비교 — 다른 도구처럼 머리말 아이콘을 누르면 서랍이 열린다."""
 
