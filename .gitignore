@@ -16,3 +16,6 @@ dist/
 # 실제 공문 — 개인정보가 들어 있다. 절대 커밋하지 않는다
 # (tests/test_licensing.py 의 NoRealDocuments 가 지킨다)
 공문/
+
+# 소개 사이트 — Firebase 가 배포할 때 만드는 캐시
+.firebase/

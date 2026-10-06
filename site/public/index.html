@@ -1,0 +1,1228 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>공문정리함 소개</title>
+<meta name="description" content="에듀파인에서 내려받은 공문을 읽어 무엇을 언제까지 해야 하는지 바탕화면 작은 창에 정리해 주는 프로그램, 공문 정리함의 사용 방법을 그림으로 안내합니다.">
+<meta property="og:title" content="공문정리함 — 공문, 이제 기한부터 보입니다">
+<meta property="og:description" content="설치부터 결재 전후 비교까지, 사용 방법을 그림으로 따라 해 보세요.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='8' width='26' height='19' rx='4' fill='%23368D32'/%3E%3Cpath d='M3 12a4 4 0 0 1 4-4h6l3 3h9a4 4 0 0 1 4 4' fill='%238ED462'/%3E%3C/svg%3E">
+<style>
+@font-face {
+  font-family: "Pretendard";
+  src: url("fonts/PretendardVariable.woff2") format("woff2-variations");
+  font-weight: 45 920;
+  font-display: swap;
+}
+
+:root {
+  /* 레퍼런스(mindmarket.com)에서 가져온 바탕 색 */
+  --bg: #FBFAF5;
+  --beige: #F4F0E3;
+  --mist: #F0F4F7;
+  --ink: #1E2428;
+  --ink-2: #2C2E2A;
+  --soft: #5A6166;
+  --line: #E4E0D3;
+  --green: #8ED462;
+  --green-deep: #368D32;
+  --green-pale: #E6F5DA;
+  --coral: #FF705D;
+  --yellow: #F5E211;
+  --lilac: #EBC1FF;
+
+  /* 앱 화면에 실제로 쓰이는 색 (widget.py, ui.html) */
+  --app-paper: #DDE1DC;
+  --app-card: #FBFBF8;
+  --app-ink: #16201B;
+  --app-soft: #5C685F;
+  --app-rule: #C3CAC3;
+  --cat-submit: #A6301F;
+  --cat-event: #3A5560;
+  --cat-apply: #8A6A1F;
+  --cat-distribute: #3C5A46;
+  --cat-notice: #7B8480;
+
+  --radius: 20px;
+  --wave: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='14' viewBox='0 0 40 14'><path d='M0 7 Q10 0 20 7 T40 7' fill='none' stroke='%238ED462' stroke-width='5' stroke-linecap='round'/></svg>");
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Pretendard", system-ui, -apple-system, "Malgun Gothic", sans-serif;
+  font-size: 17px;
+  line-height: 1.7;
+  word-break: keep-all;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+img, svg { display: block; }
+a { color: inherit; }
+.wrap { width: min(1180px, 100% - 32px); margin: 0 auto; }
+
+/* ---------- 공통 글자 ---------- */
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 700; letter-spacing: .02em;
+  color: var(--green-deep);
+}
+.eyebrow::before {
+  content: ""; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--green);
+}
+h1, h2, h3 { margin: 0; line-height: 1.25; letter-spacing: -0.03em; }
+h2 { font-size: clamp(30px, 4.4vw, 52px); font-weight: 800; }
+h3 { font-size: 22px; font-weight: 750; }
+.lead { font-size: clamp(17px, 1.6vw, 20px); color: var(--soft); max-width: 640px; }
+.wave {
+  position: relative; white-space: nowrap;
+  background: var(--wave) repeat-x left bottom / 28px 10px;
+  padding-bottom: 8px;
+}
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 999px;
+  background: #fff; border: 1px solid var(--line);
+  font-size: 14px; font-weight: 600; color: var(--ink-2);
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 15px 26px; border-radius: 999px;
+  font-weight: 700; font-size: 16px; text-decoration: none;
+  transition: transform .15s ease, background .15s ease;
+}
+.btn:hover { transform: translateY(-2px); }
+.btn-dark { background: var(--ink); color: #fff; }
+.btn-dark:hover { background: #000; }
+.btn-green { background: var(--green); color: var(--ink); }
+.btn-green:hover { background: #7fca51; }
+.btn-line { border: 1.5px solid var(--ink); }
+.btn-line:hover { background: var(--ink); color: #fff; }
+section { padding: clamp(72px, 10vw, 128px) 0; }
+.sec-head { display: grid; gap: 18px; margin-bottom: 56px; }
+
+/* ---------- 머리 ---------- */
+.nav {
+  position: sticky; top: 0; z-index: 50;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid transparent;
+  transition: border-color .2s;
+}
+.nav.scrolled { border-color: var(--line); }
+.nav .wrap { display: flex; align-items: center; gap: 28px; height: 72px; }
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 19px; text-decoration: none; letter-spacing: -0.02em; }
+.nav-links { display: flex; gap: 26px; margin-left: auto; font-size: 15px; font-weight: 600; }
+.nav-links a { text-decoration: none; color: var(--soft); }
+.nav-links a:hover { color: var(--ink); }
+.nav .btn { padding: 10px 20px; font-size: 15px; }
+
+/* ---------- 첫 화면 ---------- */
+.hero { padding: 56px 0 96px; position: relative; }
+.hero .wrap { display: grid; grid-template-columns: 1.08fr .92fr; gap: 48px; align-items: center; }
+.hero h1 { font-size: clamp(40px, 6.4vw, 80px); font-weight: 850; letter-spacing: -0.045em; line-height: 1.15; }
+.hero .lead { margin: 26px 0 34px; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.cta-help { margin: 14px 0 0; font-size: 14.5px; color: var(--soft); }
+.cta-help a { color: var(--green-deep); font-weight: 700; }
+.hero-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 34px; }
+.hero-art { position: relative; display: grid; place-items: center; min-height: 520px; }
+.blob {
+  position: absolute; border-radius: 50%;
+  filter: saturate(1.05);
+}
+.blob.b1 { width: 420px; height: 420px; background: var(--green); opacity: .9; top: 40px; right: -10px; }
+.blob.b2 { width: 120px; height: 120px; background: var(--yellow); left: 10px; bottom: 36px; }
+.blob.b3 { width: 70px; height: 70px; background: var(--lilac); right: 40px; top: 6px; }
+.hero-art .gw { position: relative; transform: rotate(-2deg); }
+.float-note {
+  position: absolute; background: #fff; border-radius: 14px; padding: 10px 14px;
+  box-shadow: 0 12px 30px rgba(30, 36, 40, .12);
+  font-size: 13px; font-weight: 650; line-height: 1.45;
+}
+.float-note b { color: var(--green-deep); }
+.float-note.n1 { left: -28px; top: 20px; transform: rotate(-4deg); }
+.float-note.n2 { right: -18px; bottom: 6px; transform: rotate(3deg); }
+
+/* ---------- 바탕화면 작은 창 (앱 화면 모형) ---------- */
+.gw {
+  width: 318px; background: var(--app-paper); border-radius: 10px;
+  box-shadow: 0 30px 60px -18px rgba(22, 32, 27, .35), 0 0 0 1px rgba(22, 32, 27, .08);
+  font-size: 13px; color: var(--app-ink); overflow: hidden; text-align: left;
+  line-height: 1.45;
+}
+.gw-head { display: flex; align-items: center; gap: 8px; padding: 11px 12px 6px; }
+.gw-title { font-weight: 800; font-size: 14px; margin-right: auto; }
+.gw-ico { width: 18px; height: 18px; display: grid; place-items: center; color: var(--app-soft); font-size: 12px; }
+.gw-ico svg { width: 15px; height: 15px; }
+.gw-opt { display: flex; align-items: center; gap: 8px; padding: 2px 12px 8px; font-size: 11px; color: var(--app-soft); }
+.gw-slider { width: 58px; height: 3px; background: var(--app-rule); border-radius: 2px; position: relative; }
+.gw-slider::after { content: ""; position: absolute; right: 8px; top: -4px; width: 11px; height: 11px; border-radius: 50%; background: var(--app-card); border: 1px solid var(--app-soft); }
+.gw-folder { margin-left: auto; padding: 2px 10px; border-radius: 999px; background: var(--app-card); border: 1px solid var(--app-rule); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gw-sum { padding: 0 12px 4px; font-weight: 750; color: var(--app-soft); font-size: 13px; }
+.gw-rows { display: grid; gap: 4px; padding: 0 8px; }
+.gw-row { display: flex; background: var(--app-card); border: 1px solid var(--app-rule); }
+.gw-bar { width: 3px; flex: none; }
+.gw-in { padding: 5px 8px; flex: 1; min-width: 0; }
+.gw-top { display: flex; justify-content: space-between; font-size: 11px; color: var(--app-soft); }
+.gw-dd { font-weight: 800; font-size: 12px; }
+.gw-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gw-foot { display: flex; align-items: center; gap: 6px; padding: 8px 12px 11px; }
+.gw-btn { padding: 3px 10px; background: var(--app-card); border: 1px solid var(--app-rule); border-radius: 4px; font-size: 12px; }
+.gw-stamp { margin-left: auto; font-size: 11px; color: var(--app-soft); }
+.c-submit { background: var(--cat-submit); } .t-submit { color: var(--cat-submit); }
+.c-event { background: var(--cat-event); } .t-event { color: var(--cat-event); }
+.c-apply { background: var(--cat-apply); }
+.c-distribute { background: var(--cat-distribute); }
+.c-notice { background: var(--cat-notice); }
+.t-soft { color: var(--app-soft); }
+
+/* ---------- 손일 카드 ---------- */
+.pain { background: var(--beige); border-radius: 0 0 40px 40px; }
+.pain-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.pain-card {
+  background: #fff; border-radius: var(--radius); padding: 30px 28px 28px;
+  display: grid; grid-template-rows: auto auto 1fr; gap: 12px;
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.pain-card:hover { transform: translateY(-4px); box-shadow: 0 18px 40px -20px rgba(30,36,40,.3); }
+.pain-ico { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; background: var(--green-pale); }
+.pain-ico svg { width: 26px; height: 26px; stroke: var(--green-deep); }
+.pain-card .before { font-size: 14px; color: var(--soft); text-decoration: line-through; text-decoration-color: var(--coral); text-decoration-thickness: 2px; }
+.pain-card p { margin: 0; font-size: 16px; color: var(--ink-2); }
+
+/* ---------- 숫자 ---------- */
+.nums { padding: 0; margin-top: clamp(72px, 10vw, 128px); }
+.nums-box {
+  background: var(--ink); color: #fff; border-radius: 36px;
+  padding: clamp(40px, 6vw, 72px);
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 24px;
+}
+.num strong { display: block; font-size: clamp(40px, 5vw, 64px); font-weight: 850; letter-spacing: -0.04em; line-height: 1.1; color: var(--green); }
+.num span { font-size: 15px; color: #C9D0D4; }
+
+/* ---------- 따라 하기 ---------- */
+.steps { display: grid; gap: clamp(64px, 9vw, 112px); }
+.step { display: grid; grid-template-columns: .85fr 1.15fr; gap: clamp(28px, 5vw, 72px); align-items: center; }
+.step:nth-child(even) { grid-template-columns: 1.15fr .85fr; }
+.step:nth-child(even) .step-text { order: 2; }
+.step-no {
+  display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 50%;
+  background: var(--green); font-weight: 850; font-size: 20px; margin-bottom: 18px;
+}
+.step h3 { font-size: clamp(26px, 3vw, 36px); font-weight: 800; margin-bottom: 14px; }
+.step-text p { margin: 0 0 14px; color: var(--ink-2); }
+.step-text ol, .step-text ul { margin: 0 0 14px; padding-left: 22px; color: var(--ink-2); }
+.step-text li { margin: 4px 0; }
+.tip {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--green-pale); border-radius: 14px; padding: 12px 16px;
+  font-size: 15px; color: var(--ink-2); margin-top: 8px;
+}
+.tip b { color: var(--green-deep); white-space: nowrap; }
+.stage {
+  background: var(--mist); border-radius: 28px; padding: clamp(22px, 4vw, 44px);
+  position: relative; min-height: 320px; display: grid; place-items: center;
+  overflow: hidden;
+}
+.stage.beige { background: var(--beige); }
+.stage-cap { position: absolute; left: 18px; top: 14px; font-size: 12px; font-weight: 700; color: var(--soft); letter-spacing: .04em; }
+.flow { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: center; }
+.arrow { font-size: 28px; color: var(--green-deep); font-weight: 800; }
+.mark {
+  position: absolute; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--coral); color: #fff; font-size: 13px; font-weight: 800;
+  display: grid; place-items: center; box-shadow: 0 0 0 4px rgba(255, 112, 93, .25);
+  z-index: 3;
+}
+.mark.in { position: static; display: inline-grid; width: 22px; height: 22px; font-size: 12px; margin-left: 8px; vertical-align: middle; }
+.ring { outline: 3px solid var(--coral); outline-offset: 3px; border-radius: 4px; animation: pulse 1.8s ease-in-out infinite; }
+@keyframes pulse { 50% { outline-color: rgba(255, 112, 93, .35); } }
+
+/* 1. 윈도우 경고 창 모형 */
+.ss {
+  width: 224px; background: #1B4F8A; color: #fff; padding: 18px 18px 14px; border-radius: 6px;
+  font-size: 12px; line-height: 1.5; box-shadow: 0 16px 36px -14px rgba(0,0,0,.4);
+}
+.ss h4 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+.ss p { margin: 0 0 8px; opacity: .9; }
+.ss .more { text-decoration: underline; font-weight: 600; display: inline-block; }
+.ss dl { margin: 6px 0 10px; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; opacity: .9; }
+.ss dt { opacity: .8; } .ss dd { margin: 0; word-break: break-all; }
+.ss .btns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 14px; }
+.ss .btns span { border: 1px solid rgba(255,255,255,.7); padding: 4px 12px; }
+
+/* 1-1. 브라우저 내려받기 경고 */
+.step-wide, .step-wide:nth-child(even) { grid-template-columns: 1fr; gap: 28px; }
+.step-wide .step-text { max-width: 820px; }
+.dl-grid { display: grid; grid-template-columns: 1fr 1.25fr; gap: 18px; }
+.dl-card { background: var(--mist); border-radius: 22px; padding: 24px; display: grid; gap: 14px; align-content: start; }
+.dl-card h5 { margin: 0; font-size: 18px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.dl-card .dot { width: 12px; height: 12px; border-radius: 50%; }
+.dl-card ol { margin: 0; padding-left: 20px; font-size: 15.5px; color: var(--ink-2); }
+.dl-card li { margin: 3px 0; }
+.dl-foot { margin: -8px 0 0; font-size: 13.5px; color: var(--soft); }
+.bw { background: #fff; border-radius: 12px; box-shadow: 0 16px 36px -20px rgba(0,0,0,.35); font-size: 12.5px; overflow: hidden; min-width: 0; }
+.bw-bar { display: flex; align-items: center; justify-content: space-between; background: #ECEEF0; padding: 7px 10px; }
+.bw-tab { width: 110px; height: 14px; border-radius: 6px 6px 0 0; background: #fff; }
+.bw-icons { display: flex; gap: 12px; align-items: center; color: var(--soft); font-weight: 700; }
+.bw-dl { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #FCE8E6; color: #C5221F; }
+.ring-soft { box-shadow: 0 0 0 3px rgba(255,112,93,.45); }
+.bw-pop { padding: 12px; display: grid; gap: 10px; }
+.bw-file { display: flex; align-items: center; gap: 10px; }
+.bw-file .warn { flex: none; width: 22px; height: 22px; border-radius: 50%; background: #FCE8E6; color: #C5221F; font-weight: 900; display: grid; place-items: center; }
+.bw-name { flex: 1; min-width: 0; font-weight: 700; overflow-wrap: anywhere; line-height: 1.35; }
+.bw-name small { display: block; font-weight: 500; color: #C5221F; font-size: 11.5px; margin-top: 2px; }
+.bw-more { flex: none; color: var(--soft); font-weight: 800; font-size: 16px; }
+.bw-btns, .bw-menu { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bw-btns span:not(.mark), .bw-menu span:not(.mark) { border: 1px solid #C8CCD0; border-radius: 6px; padding: 3px 12px; }
+.bw-btns .go, .bw-menu .go { background: #EEF3FD; border-color: #9DB6EA; font-weight: 700; }
+.bw-msg { margin: 0; font-weight: 700; line-height: 1.45; }
+.bw-link { margin: 0; color: #0B57D0; display: flex; align-items: center; }
+.bw-flow { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 10px; align-items: center; }
+
+/* 엣지 다운로드 경고 (실제 화면 참고) */
+.dl-card.edge { display: grid; grid-template-columns: .8fr 1.2fr; gap: 28px; align-items: center; }
+.dl-card.chrome { margin-top: 14px; display: grid; gap: 8px; }
+.dl-card.chrome p { margin: 0; font-size: 15.5px; color: var(--ink-2); }
+.edge-text { display: grid; gap: 14px; }
+.warn-note { display: flex; gap: 10px; background: #FFF1EE; border-radius: 12px; padding: 10px 14px; font-size: 14.5px; color: var(--ink-2); }
+.warn-note b { color: #C5221F; white-space: nowrap; }
+.ed-dl, .ed-dlg { position: relative; background: #fff; border-radius: 12px; box-shadow: 0 16px 36px -20px rgba(0,0,0,.4); font-size: 12px; line-height: 1.5; color: #1b1b1b; min-width: 0; }
+.ed-dl { padding: 10px 10px 12px; }
+.ed-head { display: flex; justify-content: space-between; align-items: center; padding: 2px 4px 8px; }
+.ed-head b { font-size: 14px; }
+.ed-head span { font-size: 11px; color: #555; }
+.ed-item { display: flex; gap: 8px; background: #E9E9E9; border: 1.5px solid #333; border-radius: 10px; padding: 8px 8px 8px 10px; }
+.ed-item p { margin: 0; flex: 1; min-width: 0; font-size: 11.5px; overflow-wrap: anywhere; }
+.ed-shield { flex: none; width: 16px; height: 16px; border: 1.5px solid #C77700; color: #C77700; border-radius: 4px 4px 8px 8px; font-size: 10px; font-weight: 900; display: grid; place-items: center; margin-top: 2px; }
+.ed-acts { display: flex; gap: 6px; align-items: flex-start; flex: none; font-weight: 800; }
+.ed-acts span:not(.mark) { padding: 0 4px; border-radius: 4px; }
+.ed-more { display: inline-block; margin-top: 8px; border: 1px solid #D0D0D0; border-radius: 6px; padding: 1px 8px; font-size: 11px; }
+.ed-menu { margin: 8px 0 0 auto; width: 80%; background: #fff; border-radius: 10px; box-shadow: 0 10px 28px -8px rgba(0,0,0,.35); padding: 6px; display: grid; gap: 1px; font-size: 12px; }
+.ed-menu > span { padding: 4px 10px; border-radius: 6px; display: flex; align-items: center; }
+.ed-menu .on { background: #E6E6E6; font-weight: 700; }
+.ed-menu hr { border: 0; border-top: 1px solid #E3E3E3; margin: 3px 0; }
+.ed-dlg { padding: 18px 16px 14px; }
+.ed-x { position: absolute; right: 12px; top: 10px; color: #555; }
+.ed-dlg h6 { margin: 0 14px 8px 0; font-size: 14px; line-height: 1.35; font-weight: 700; overflow-wrap: anywhere; }
+.ed-dlg p { margin: 0 0 8px; font-size: 11px; color: #444; }
+.ed-meta { color: #333 !important; }
+.ed-link { color: #0B57D0 !important; font-weight: 600; }
+.ed-btns { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 6px; }
+.ed-btns .cancel { border: 1px solid #CFCFCF; border-radius: 6px; padding: 3px 10px; }
+.ed-btns .del { background: #1b1b1b; color: #fff; border-radius: 6px; padding: 3px 6px 3px 12px; display: inline-flex; align-items: center; gap: 6px; }
+.ed-btns .del i { font-style: normal; padding: 0 5px; border-radius: 4px; }
+.ed-drop { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 6px; }
+.ed-drop span:not(.mark) { background: #fff; border-radius: 8px; box-shadow: 0 8px 20px -6px rgba(0,0,0,.35); padding: 5px 14px; font-weight: 700; }
+
+/* 2. 폴더 묻는 창 */
+.dlg {
+  width: min(340px, 100%); background: #fff; border-radius: 10px; overflow: hidden;
+  box-shadow: 0 20px 40px -18px rgba(0,0,0,.35); font-size: 14px;
+}
+.dlg-t { background: #F3F3F3; padding: 8px 12px; font-size: 12px; display: flex; justify-content: space-between; color: #333; }
+.dlg-b { padding: 18px 18px 16px; }
+.dlg-path { margin: 10px 0 16px; padding: 8px 10px; background: var(--mist); border-radius: 6px; font-size: 13px; font-family: ui-monospace, Consolas, monospace; }
+.dlg-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.dlg-btns span { padding: 5px 16px; border: 1px solid #C8C8C8; border-radius: 4px; font-size: 13px; }
+.dlg-btns .primary { background: #0067C0; border-color: #0067C0; color: #fff; }
+
+/* 3. 파일 목록 */
+.files { background: #fff; border-radius: 12px; padding: 10px; width: min(430px, 100%); box-shadow: 0 16px 36px -20px rgba(0,0,0,.35); font-size: 12.5px; }
+.files-h { font-size: 12px; color: var(--soft); padding: 2px 6px 8px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.file { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; }
+.file i { font-style: normal; font-size: 10px; font-weight: 800; color: #fff; padding: 2px 5px; border-radius: 3px; flex: none; }
+.file .pdf { background: #D24C3F; } .file .hwp { background: #2F7BD3; }
+.file em { font-style: normal; background: var(--green-pale); color: var(--green-deep); font-weight: 700; border-radius: 4px; padding: 0 3px; }
+.file.grp { background: #FAFBF7; }
+.grouped { background: var(--app-card); border: 1px solid var(--app-rule); border-left: 3px solid var(--cat-apply); border-radius: 4px; padding: 10px 12px; width: min(330px, 100%); font-size: 13px; box-shadow: 0 16px 36px -20px rgba(0,0,0,.35); }
+.grouped .row1 { display: flex; justify-content: space-between; font-size: 12px; color: var(--app-soft); margin-bottom: 2px; }
+.chip { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--app-paper); color: var(--app-ink); margin-left: 6px; }
+
+/* 4. 작은 창 해부 */
+.anatomy { display: flex; flex-wrap: wrap; gap: 36px 40px; align-items: center; justify-content: center; width: 100%; padding-top: 26px; }
+.anatomy .gw { position: relative; overflow: visible; margin: 0 26px; }
+.anatomy .mark { width: 22px; height: 22px; font-size: 12px; }
+.legend { flex: 1 1 250px; max-width: 340px; }
+.legend { display: grid; gap: 8px; font-size: 14.5px; margin: 0; padding: 0; list-style: none; }
+.legend li { display: flex; gap: 10px; align-items: baseline; }
+.legend .mk { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--coral); color: #fff; font-size: 12px; font-weight: 800; display: grid; place-items: center; transform: translateY(3px); }
+.cats { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 6px; }
+.cat { display: flex; align-items: center; gap: 8px; background: #fff; border-radius: 12px; padding: 8px 12px; font-size: 14px; border: 1px solid var(--line); }
+.cat i { width: 6px; height: 26px; border-radius: 3px; flex: none; }
+.cat b { display: block; font-size: 14px; }
+.cat small { display: block; color: var(--soft); font-size: 12.5px; line-height: 1.35; }
+
+/* 5. 전체 화면 */
+.browser { width: 100%; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 50px -24px rgba(0,0,0,.35); font-size: 12px; color: var(--app-ink); }
+.b-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #ECEEF0; }
+.b-bar i { width: 10px; height: 10px; border-radius: 50%; background: #CBD0D4; }
+.b-url { margin-left: 10px; flex: 1; background: #fff; border-radius: 999px; padding: 2px 12px; color: var(--soft); font-size: 11px; }
+.b-app { background: var(--app-paper); display: grid; grid-template-columns: 1fr 1.1fr; min-height: 300px; }
+.b-left { padding: 12px; display: grid; gap: 5px; align-content: start; }
+.b-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+.b-head b { font-size: 14px; margin-right: auto; }
+.b-tool { font-size: 10.5px; background: var(--app-card); border: 1px solid var(--app-rule); padding: 1px 7px; border-radius: 3px; }
+.b-item { display: flex; gap: 8px; align-items: center; background: var(--app-card); border: 1px solid var(--app-rule); border-left-width: 3px; padding: 6px 8px; }
+.b-item .box { width: 12px; height: 12px; border: 1.5px solid var(--app-soft); border-radius: 2px; flex: none; }
+.b-item .dd { font-weight: 800; width: 34px; flex: none; }
+.b-item span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-item.on { outline: 2px solid var(--app-ink); outline-offset: -1px; }
+.b-panel { background: var(--app-card); border-left: 1px solid var(--app-rule); padding: 14px; display: grid; gap: 10px; align-content: start; position: relative; }
+.b-panel h5 { margin: 0; font-size: 14px; line-height: 1.35; }
+.fld { display: grid; gap: 3px; }
+.fld label { font-size: 10.5px; color: var(--app-soft); }
+.fld .val { border: 1px solid var(--app-rule); padding: 4px 8px; border-radius: 3px; background: #fff; }
+.dates { display: flex; gap: 5px; flex-wrap: wrap; }
+.dates span { border: 1px dashed var(--app-soft); padding: 2px 8px; border-radius: 999px; font-size: 11px; }
+.dates .pick { background: var(--app-ink); color: #fff; border-style: solid; border-color: var(--app-ink); }
+.done-btn { display: inline-block; background: var(--app-ink); color: #fff; padding: 6px 14px; border-radius: 3px; font-weight: 700; }
+
+/* 6. 폴더 나무 */
+.trees { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 14px; align-items: center; width: 100%; }
+.tree { background: #fff; border-radius: 14px; padding: 16px 16px 14px; font-size: 13.5px; box-shadow: 0 16px 36px -22px rgba(0,0,0,.35); }
+.tree h6 { margin: 0 0 10px; font-size: 12px; color: var(--soft); font-weight: 700; }
+.tree ul { list-style: none; margin: 0; padding: 0 0 0 16px; }
+.tree > ul { padding: 0; }
+.tree li { padding: 2px 0; }
+.tree .dir::before { content: "📁 "; }
+.tree .doc { color: var(--soft); font-size: 12.5px; }
+.tree .doc::before { content: "📄 "; }
+.tree .moved { color: var(--green-deep); font-weight: 700; }
+.tree .new-tag { font-size: 10px; background: var(--green); color: var(--ink); border-radius: 999px; padding: 0 6px; margin-left: 4px; font-weight: 800; }
+.confirm { grid-column: 1 / -1; justify-self: center; background: #fff; border-radius: 10px; padding: 12px 16px; font-size: 13px; box-shadow: 0 16px 36px -22px rgba(0,0,0,.35); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.confirm span.ok { background: #0067C0; color: #fff; padding: 3px 14px; border-radius: 4px; }
+
+/* 7. 결재 전후 비교 */
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; width: 100%; }
+.paper { background: #fff; border-radius: 6px; padding: 16px 16px 18px; font-size: 12.5px; line-height: 1.75; box-shadow: 0 16px 36px -22px rgba(0,0,0,.35); position: relative; font-family: "Batang", "바탕", serif; }
+.paper h6 { margin: 0 0 8px; font-family: "Pretendard", sans-serif; font-size: 12px; color: var(--soft); font-weight: 700; }
+.paper p { margin: 0; }
+.diff { outline: 2.5px solid #E0301E; outline-offset: 1px; border-radius: 2px; }
+.drag { position: absolute; inset: 34px 8px 8px 8px; border: 2px dashed var(--green-deep); border-radius: 4px; pointer-events: none; }
+.cmp-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; justify-content: center; grid-column: 1 / -1; }
+.cmp-steps span { font-size: 13px; background: #fff; border-radius: 999px; padding: 4px 12px; border: 1px solid var(--line); font-weight: 600; }
+.cmp-steps span b { color: var(--green-deep); margin-right: 4px; }
+
+/* ---------- 업무 도우미 ---------- */
+.helpers { background: var(--beige); border-radius: 40px; }
+.help-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.help { background: #fff; border-radius: var(--radius); padding: 28px; display: grid; gap: 14px; align-content: start; }
+.help p { margin: 0; color: var(--ink-2); font-size: 16px; }
+.help .mini { background: var(--app-paper); border-radius: 10px; padding: 12px; font-size: 12.5px; color: var(--app-ink); }
+.keys { display: flex; flex-wrap: wrap; gap: 5px; }
+.keys span { background: var(--app-card); border: 1px solid var(--app-rule); min-width: 30px; text-align: center; padding: 3px 7px; border-radius: 4px; }
+.saved { display: grid; gap: 4px; margin-top: 8px; }
+.saved div { background: var(--app-card); border: 1px solid var(--app-rule); padding: 4px 8px; display: flex; justify-content: space-between; }
+.saved small { color: var(--app-soft); }
+.tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tools div { background: var(--app-card); border: 1px solid var(--app-rule); border-radius: 6px; padding: 8px 4px; text-align: center; font-size: 11.5px; }
+.tools div b { display: block; font-size: 18px; font-weight: 400; }
+.mini-cmp { display: flex; gap: 6px; align-items: center; }
+.mini-cmp span { flex: 1; background: var(--app-card); border: 1px solid var(--app-rule); padding: 6px; border-radius: 4px; }
+.mini-cmp .diff { outline-width: 2px; }
+
+/* ---------- 안전 ---------- */
+.safe-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+.safe { border-top: 3px solid var(--ink); padding-top: 20px; }
+.safe h3 { font-size: 19px; margin-bottom: 8px; }
+.safe p { margin: 0; color: var(--soft); font-size: 15.5px; }
+.limits { margin-top: 48px; background: var(--mist); border-radius: var(--radius); padding: 26px 30px; }
+.limits h3 { font-size: 18px; margin-bottom: 10px; }
+.limits ul { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 15.5px; }
+
+/* ---------- 묻고 답하기 ---------- */
+.faq { display: grid; gap: 10px; max-width: 880px; }
+.faq details { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 0 24px; }
+.faq summary { cursor: pointer; list-style: none; padding: 20px 0; font-weight: 700; font-size: 18px; display: flex; justify-content: space-between; gap: 16px; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; font-size: 24px; line-height: 1; color: var(--green-deep); transition: transform .2s; }
+.faq details[open] summary::after { transform: rotate(45deg); }
+.faq .ans { padding: 0 0 22px; color: var(--ink-2); }
+.faq .ans p { margin: 0 0 10px; }
+.faq kbd { font-family: inherit; font-size: 14px; background: var(--mist); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; }
+
+/* ---------- 마무리 ---------- */
+.final .box {
+  background: var(--green); border-radius: 40px; padding: clamp(48px, 8vw, 96px) clamp(24px, 6vw, 80px);
+  display: grid; grid-template-columns: 1.3fr auto; gap: 32px; align-items: center; position: relative; overflow: hidden;
+}
+.final h2 { font-size: clamp(32px, 4.6vw, 56px); }
+.final p { margin: 16px 0 0; font-size: 18px; color: var(--ink-2); }
+.final .cta { display: grid; gap: 10px; justify-items: stretch; position: relative; }
+.final .ring-deco { position: absolute; right: -80px; top: -80px; width: 260px; height: 260px; border-radius: 50%; border: 36px solid rgba(255,255,255,.35); }
+.final small { font-size: 13px; color: var(--ink-2); text-align: center; }
+
+footer { padding: 40px 0 56px; color: var(--soft); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 28px; }
+footer a { color: var(--soft); }
+.note-ex { font-size: 13px; color: var(--soft); margin-top: 18px; }
+
+/* ---------- 나타나기 효과 ---------- */
+.js .rv { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
+.js .rv.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .js .rv { opacity: 1; transform: none; transition: none; }
+  .ring { animation: none; }
+  html { scroll-behavior: auto; }
+}
+
+/* ---------- 좁은 화면 ---------- */
+@media (max-width: 1020px) {
+  .nums-box { grid-template-columns: repeat(3, 1fr); }
+  .safe-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 860px) {
+  .nav-links { display: none; }
+  .nav .btn { margin-left: auto; }
+  .hero .wrap, .step, .step:nth-child(even), .final .box { grid-template-columns: 1fr; }
+  .step:nth-child(even) .step-text { order: 0; }
+  .hero-art { min-height: 460px; }
+  .blob.b1 { width: 320px; height: 320px; right: 50%; margin-right: -160px; top: 50px; }
+  .pain-grid, .help-grid { grid-template-columns: 1fr; }
+  .nums-box { grid-template-columns: repeat(2, 1fr); }
+  .trees { grid-template-columns: 1fr; }
+  .dl-grid { grid-template-columns: 1fr; }
+  .dl-card.edge { grid-template-columns: 1fr; }
+  .trees .arrow { transform: rotate(90deg); justify-self: center; }
+  .b-app { grid-template-columns: 1fr; }
+  .b-panel { border-left: 0; border-top: 1px solid var(--app-rule); }
+}
+@media (max-width: 520px) {
+  body { font-size: 16px; }
+  .gw { width: 290px; }
+  .float-note.n1 { left: 0; top: -14px; }
+  .float-note.n2 { right: 0; bottom: 10px; }
+  .safe-grid { grid-template-columns: 1fr; }
+  .cmp { grid-template-columns: 1fr; }
+  .ss { width: 100%; }
+  .flow .arrow { transform: rotate(90deg); }
+  .stage { padding-top: 44px; }
+  .bw-flow { grid-template-columns: 1fr; }
+  .bw-flow .arrow { transform: rotate(90deg); justify-self: center; }
+}
+</style>
+</head>
+<body>
+<script>document.documentElement.classList.add("js")</script>
+
+<!-- 머리 -->
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="logo" href="#top">
+      <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="8" width="26" height="19" rx="4" fill="#368D32"/><path d="M3 12a4 4 0 0 1 4-4h6l3 3h9a4 4 0 0 1 4 4" fill="#8ED462"/><path d="M10 19l4 3 8-7" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      공문정리함
+    </a>
+    <nav class="nav-links" aria-label="바로 가기">
+      <a href="#why">하는 일</a>
+      <a href="#how">사용 방법</a>
+      <a href="#helpers">업무 도우미</a>
+      <a href="#safe">안전</a>
+      <a href="#faq">묻고 답하기</a>
+    </nav>
+    <a class="btn btn-dark" href="https://github.com/techhyunseo2/gongmun/releases/latest/download/gongmun-setup.exe">내려받기</a>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- 첫 화면 -->
+<section class="hero">
+  <div class="wrap">
+    <div class="rv">
+      <span class="eyebrow">에듀파인 공문 정리 도우미</span>
+      <h1 style="margin-top:18px">공문, 이제<br><span class="wave">기한부터</span> 보입니다.</h1>
+      <p class="lead">내려받은 공문을 읽고, 기한을 찾고, 업무 종류를 나눠 화면 구석의 작은 창에 정리해 드립니다. 업무 처리가 끝난 공문은 월별 폴더로 옮겨 드립니다.</p>
+      <div class="hero-cta">
+        <a class="btn btn-dark" href="https://github.com/techhyunseo2/gongmun/releases/latest/download/gongmun-setup.exe">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0l-5-5m5 5l5-5M5 20h14"/></svg>
+          설치 파일 받기
+        </a>
+        <a class="btn btn-line" href="#how">사용 방법 보기</a>
+      </div>
+      <p class="cta-help">내려받을 때 크롬·엣지에서 오류가 발생하신다면 <a href="#step1">이렇게 하세요 →</a></p>
+      <div class="hero-tags">
+        <span class="pill">오프라인 환경에서도 동작</span>
+        <span class="pill">한글·MS Office 없이 사용가능</span>
+        <span class="pill">Windows 11 64bit</span>
+      </div>
+    </div>
+
+    <div class="hero-art rv" aria-label="바탕화면 작은 창 예시">
+      <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+      <div class="gw" aria-hidden="true">
+        <div class="gw-head">
+          <span class="gw-title">공문 정리함</span>
+          <span class="gw-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="2" width="8" height="9" fill="currentColor"/><rect x="3" y="5" width="8" height="9" fill="#DDE1DC"/></svg></span>
+          <span class="gw-ico"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="6" height="8" fill="#3C5A46"/><rect x="8" y="4" width="6" height="8" fill="#A6301F"/></svg></span>
+          <span class="gw-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="10" height="11" rx="1"/><rect x="6" y="1.5" width="4" height="3" rx=".6" fill="#DDE1DC"/></svg></span>
+          <span class="gw-ico"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="3.5" r="1.3"/><circle cx="8" cy="3.5" r="1.3"/><circle cx="12.5" cy="3.5" r="1.3"/><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/><circle cx="3.5" cy="12.5" r="1.3"/><circle cx="8" cy="12.5" r="1.3"/><circle cx="12.5" cy="12.5" r="1.3"/></svg></span>
+          <span class="gw-ico">—</span>
+          <span class="gw-ico">✕</span>
+        </div>
+        <div class="gw-opt">투명도 <span class="gw-slider"></span><span class="gw-folder">…\문서\공문</span></div>
+        <div class="gw-sum">처리할 것 5건</div>
+        <div class="gw-rows">
+          <div class="gw-row"><i class="gw-bar c-submit"></i><div class="gw-in"><div class="gw-top"><span class="gw-dd t-submit">D-1</span><span>제출·보고</span></div><div class="gw-name">2026 학교폭력 실태조사 결과 제출</div></div></div>
+          <div class="gw-row"><i class="gw-bar c-apply"></i><div class="gw-in"><div class="gw-top"><span class="gw-dd t-submit">D-3</span><span>신청·공모</span></div><div class="gw-name">해외 파견교사 선발 계획 알림</div></div></div>
+          <div class="gw-row"><i class="gw-bar c-event"></i><div class="gw-in"><div class="gw-top"><span class="gw-dd t-event">D-6</span><span>일정·행사</span></div><div class="gw-name">OO교육청 진로교육 담당자 연수 안내</div></div></div>
+          <div class="gw-row"><i class="gw-bar c-distribute"></i><div class="gw-in"><div class="gw-top"><span class="gw-dd t-event">D-9</span><span>배포·전달</span></div><div class="gw-name">가정통신문 배부 협조 요청</div></div></div>
+          <div class="gw-row"><i class="gw-bar c-notice"></i><div class="gw-in"><div class="gw-top"><span class="gw-dd t-soft">—</span><span>안내·참고</span></div><div class="gw-name">개인정보 보호 수칙 안내</div></div></div>
+        </div>
+        <div class="gw-foot"><span class="gw-btn">자세히 보기</span><span class="gw-btn">다시 훑기</span><span class="gw-stamp">09:40</span></div>
+      </div>
+      <div class="float-note n1">첨부에만 적힌 기한도<br><b>찾아냅니다</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- 하는 일 -->
+<section class="pain" id="why">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">하는 일</span>
+      <h2>매일 반복하던 <span class="wave">손일</span>을 덜어 드립니다</h2>
+      <p class="lead">공문 한 건을 처리할 때마다 되풀이하던 일을 프로그램이 대신합니다. 줄 그은 글이 지금까지의 방식입니다.</p>
+    </div>
+    <div class="pain-grid">
+      <article class="pain-card rv">
+        <div class="pain-ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M9 13h6"/></svg></div>
+        <div class="before">본문과 첨부가 폴더에 흩어진다</div>
+        <p><strong>한 건으로 묶기.</strong> 파일 이름의 접수번호를 보고 본문과 첨부를 하나로 묶고, 공문마다 제목 폴더를 만들어 넣습니다.</p>
+      </article>
+      <article class="pain-card rv">
+        <div class="pain-ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/><path d="M9 15l2 2 4-4"/></svg></div>
+        <div class="before">기한이 첨부 서식에만 적혀 있어 놓친다</div>
+        <p><strong>가장 이른 기한 찾기.</strong> 본문과 첨부를 모두 읽어 가장 이른 기한을 찾아 D-day로 보여 줍니다.</p>
+      </article>
+      <article class="pain-card rv">
+        <div class="pain-ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="8"/></svg></div>
+        <div class="before">신청 기한과 행사 날짜가 헷갈린다</div>
+        <p><strong>기한과 행사일 구분.</strong> 문장을 보고 무엇이 마감이고 무엇이 행사 날짜인지 나눕니다.</p>
+      </article>
+      <article class="pain-card rv">
+        <div class="pain-ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h6"/></svg></div>
+        <div class="before">내 일인지 안내인지 일일이 연다</div>
+        <p><strong>다섯 가지로 분류.</strong> 제출·보고 / 일정·행사 / 신청·공모 / 배포·전달 / 안내·참고로 나눠 색으로 표시합니다.</p>
+      </article>
+      <article class="pain-card rv">
+        <div class="pain-ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M12 10v6m0 0l-3-3m3 3l3-3"/></svg></div>
+        <div class="before">끝난 공문 월별 정리를 미룬다</div>
+        <p><strong>월별 폴더로 한 번에.</strong> 처리한 공문을 마감 월 폴더(8월, 9월…)로 옮깁니다. 옮기기 전에 먼저 보여 주고 묻습니다.</p>
+      </article>
+      <article class="pain-card rv">
+        <div class="pain-ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="8" height="14" rx="1"/><rect x="13" y="5" width="8" height="14" rx="1"/><rect x="15" y="10" width="4" height="3" stroke="#E0301E"/></svg></div>
+        <div class="before">상위 결재자가 말없이 고쳐주신 글자를 못 찾는다</div>
+        <p><strong>결재 전후 비교.</strong> 결재 전후 문서를 화면에서 견주어 달라진 자리를 빨간 상자로 보여 줍니다.</p>
+      </article>
+    </div>
+  </div>
+
+  <div class="wrap nums rv">
+    <div class="nums-box">
+      <div class="num"><strong>7</strong><span>읽을 수 있는 파일 형식<br>hwpx·hwp·pdf·xlsx·xls·docx·txt</span></div>
+      <div class="num"><strong>5</strong><span>색으로 나누는<br>업무 종류</span></div>
+      <div class="num"><strong>10분</strong><span>마다 폴더를 다시 훑어<br>새 공문을 올립니다</span></div>
+      <div class="num"><strong>0</strong><span>밖으로 보내는<br>공문 내용</span></div>
+      <div class="num"><strong>338</strong><span>배포 전에 돌리는<br>자동 테스트</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 사용 방법 -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">사용 방법</span>
+      <h2>그림으로 <span class="wave">따라 하기</span></h2>
+      <p class="lead">내려받기부터 끝난 공문 정리까지 총 여덟 단계입니다. 글로 읽기 어려우셨던 부분을 그림으로 확인해 보세요.</p>
+    </div>
+
+    <div class="steps">
+
+      <!-- 내려받기 -->
+      <article class="step step-wide" id="step1">
+        <div class="step-text rv">
+          <span class="step-no">1</span>
+          <h3>내려받기</h3>
+          <p><strong>설치 파일 받기</strong>를 누르면 브라우저가 파일을 내려받습니다. 이때 특히 <strong>엣지</strong>는 <strong>"일반적으로 다운로드되지 않습니다"</strong>라며 한 번 더 묻습니다. <strong>파일을 지우지 말고 유지</strong>를 골라 주세요.</p>
+          <div class="tip"><b>바이러스가 있는 프로그램 아닌가요?</b><span>프로그램 서명 인증서가 없고 아직 내려받은 사람이 적은 새 프로그램에 브라우저가 붙이는 확인입니다. 바이러스라는 뜻이 아닙니다.</span></div>
+        </div>
+        <div class="rv">
+          <article class="dl-card edge">
+            <div class="edge-text">
+              <h5><span class="dot" style="background:#0F8A7E"></span>엣지(Edge)에서 막힐 때</h5>
+              <ol>
+                <li>오른쪽 위 <strong>다운로드</strong> 창에 <strong>"…은(는) 일반적으로 다운로드되지 않습니다"</strong>가 뜹니다.</li>
+                <li>파일 줄 오른쪽 <strong>⋯</strong>을 누르고 <strong>유지</strong>를 고릅니다.</li>
+                <li><strong>"열기 전에 … 신뢰할 수 있는지 확인합니다"</strong> 창이 뜨면, <strong>삭제 옆의 ∨</strong>를 누르고 <strong>그래도 계속</strong>을 고릅니다.</li>
+              </ol>
+              <div class="warn-note"><b>주의</b><span><strong>삭제</strong> 글자를 누르면 파일이 지워집니다. 꼭 오른쪽 <strong>∨</strong>를 눌러 주세요.</span></div>
+            </div>
+            <div class="bw-flow">
+              <div class="ed-dl" aria-label="엣지 다운로드 창에서 점 세 개를 눌러 유지를 고르는 그림">
+                <div class="ed-head"><b>다운로드</b><span>📁&nbsp; 🔍&nbsp; ⋯</span></div>
+                <div class="ed-item">
+                  <span class="ed-shield">!</span>
+                  <p>gongmun-setup.exe은(는) 일반적으로 다운로드되지 않습니다. <b>열기 전에</b> gongmun-setup.exe을(를) 신뢰하는지 확인합니다.</p>
+                  <span class="ed-acts"><span>🗑</span><span class="ring">⋯</span><span class="mark in" style="margin-left:0">1</span></span>
+                </div>
+                <span class="ed-more">자세히 보기</span>
+                <div class="ed-menu">
+                  <span>🗑&nbsp; 삭제</span>
+                  <span class="on ring">유지<span class="mark in" style="margin-left:auto">2</span></span>
+                  <span>이 파일을 안전한 것으로 보고</span>
+                  <span>자세히 알아보기</span>
+                  <hr>
+                  <span>다운로드 링크 복사</span>
+                </div>
+              </div>
+              <span class="arrow">→</span>
+              <div class="ed-dlg" aria-label="확인 창에서 삭제 옆 화살표를 눌러 그래도 계속을 고르는 그림">
+                <span class="ed-x">✕</span>
+                <h6>열기 전에 gongmun-setup.exe을(를) 신뢰할 수 있는지 확인합니다.</h6>
+                <p>이 파일이 일반적으로 다운로드되지 않기 때문에 Microsoft Defender SmartScreen은 이 파일이 안전한지 확인할 수 없습니다.</p>
+                <p class="ed-meta">이름: gongmun-setup.exe<br>게시자: 알 수 없음</p>
+                <p class="ed-link">이 앱을 안전한 것으로 보고<br>자세히 알아보기</p>
+                <div class="ed-btns"><span class="cancel">취소</span><span class="del">삭제 <i class="ring">∨</i></span><span class="mark in" style="margin-left:2px">3</span></div>
+                <div class="ed-drop"><span class="ring">그래도 계속</span><span class="mark in" style="margin-left:2px">4</span></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="dl-card chrome">
+            <h5><span class="dot" style="background:#4285F4"></span>크롬(Chrome)</h5>
+            <p>크롬은 대부분 경고 없이 바로 받아집니다. 보안 설정에 따라 경고가 뜨면, 오른쪽 위 <strong>내려받기(↓)</strong> 목록에서 그 파일의 <strong>계속</strong>·<strong>그래도 다운로드</strong>처럼 파일을 남기는 단추를 골라 주세요.</p>
+          </article>
+        </div>
+          <p class="dl-foot rv">※ 창의 문구와 단추 위치는 브라우저 버전에 따라 조금 다를 수 있습니다. 학교 PC에 따라 관리 정책으로 내려받기 자체가 막혀 있으면 이 단추가 보이지 않으니, 학교 정보 담당자에게 문의해 주세요.</p>
+      </article>
+
+      <!-- 설치 -->
+      <article class="step" id="step2">
+        <div class="step-text rv">
+          <span class="step-no">2</span>
+          <h3>설치하기</h3>
+          <p>내려받은 <strong>gongmun-setup.exe</strong>를 두 번 누릅니다.</p>
+          <p>파란 <strong>"Windows의 PC 보호"</strong> 창이 뜨면</p>
+          <ol>
+            <li>왼쪽의 <strong>추가 정보</strong>를 누르고</li>
+            <li>아래에 나타난 <strong>실행</strong>을 누릅니다.</li>
+          </ol>
+          <p>그다음은 <strong>다음</strong>만 누르면 설치가 끝납니다. 관리자 비밀번호는 묻지 않습니다.</p>
+          <div class="tip"><b>왜 뜨나요?</b><span>코드 서명 인증서를 사지 않은 프로그램에 윈도우가 늘 띄우는 창입니다. 바이러스라는 뜻이 아닙니다.</span></div>
+        </div>
+        <div class="stage rv" aria-label="Windows의 PC 보호 창에서 추가 정보, 실행 순서로 누르는 그림">
+          <span class="stage-cap">화면 예시</span>
+          <div class="flow">
+            <div class="ss" style="position:relative">
+              <h4>Windows의 PC 보호</h4>
+              <p>인식할 수 없는 앱의 시작을 막았습니다. 이 앱을 실행하면 PC가 위험에 노출될 수 있습니다.</p>
+              <span class="more ring">추가 정보</span><span class="mark in">1</span>
+              <div class="btns"><span>실행 안 함</span></div>
+            </div>
+            <span class="arrow">→</span>
+            <div class="ss" style="position:relative">
+              <h4>Windows의 PC 보호</h4>
+              <dl><dt>앱:</dt><dd>gongmun-setup.exe</dd><dt>게시자:</dt><dd>알 수 없는 게시자</dd></dl>
+              <div class="btns"><span class="mark in" style="margin:0 4px 0 0">2</span><span class="ring">실행</span><span>실행 안 함</span></div>
+            </div>
+          </div>
+        </div>
+
+      </article>
+
+      <article class="step" id="step3">
+        <div class="step-text rv">
+          <span class="step-no">3</span>
+          <h3>공문 폴더 정하기</h3>
+          <p>처음 켜면 공문을 모아 둘 폴더를 묻습니다.</p>
+          <p>따로 만들어 둔 폴더가 없으면 그냥 <strong>확인</strong>을 누르세요. <strong>문서 안에 "공문" 폴더</strong>가 새로 만들어집니다.</p>
+          <p>폴더는 나중에 작은 창의 폴더 표시(둥근 상자)를 눌러 언제든 바꿀 수 있습니다.</p>
+        </div>
+        <div class="stage beige rv">
+          <span class="stage-cap">화면 예시</span>
+          <div class="dlg">
+            <div class="dlg-t"><span>공문 정리함</span><span>✕</span></div>
+            <div class="dlg-b">
+              공문을 모아 둘 폴더를 골라 주세요.
+              <div class="dlg-path">C:\Users\(사용자)\Documents\공문</div>
+              <div class="dlg-btns"><span class="primary ring">확인</span><span>다른 폴더</span></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step" id="step4">
+        <div class="step-text rv">
+          <span class="step-no">4</span>
+          <h3>에듀파인 공문을 폴더에 저장하기</h3>
+          <p>에듀파인에서 공문을 내려받을 때 위 <strong>공문 폴더</strong>에 저장합니다. 본문과 첨부가 따로 받아져도 괜찮습니다.</p>
+          <p>파일 이름 앞의 <strong>접수번호</strong>가 같으면 한 건으로 묶여, 목록에는 한 줄로 뜹니다.</p>
+          <p>새로 넣은 공문은 10분 안에 저절로 목록에 올라옵니다. 바로 보려면 <strong>다시 훑기</strong>를 누르세요.</p>
+          <div class="tip"><b>팁</b><span>크롬은 내려받을 때마다 저장 위치를 묻도록 설정해 두면 편합니다.</span></div>
+        </div>
+        <div class="stage rv" aria-label="접수번호가 같은 본문과 첨부 파일이 한 건으로 묶이는 그림">
+          <span class="stage-cap">접수번호로 묶기</span>
+          <div class="flow" style="flex-direction:column">
+            <div class="files">
+              <div class="files-h">📁 문서 › 공문</div>
+              <div class="file grp"><i class="pdf">PDF</i><span><em>[예시중학교-4971]</em> (본문) 해외 파견교사 선발 계획 알림.pdf</span></div>
+              <div class="file grp"><i class="hwp">HWP</i><span><em>[예시중학교-4971]</em> (첨부) 해외 파견교사 선발 계획.hwp</span></div>
+              <div class="file"><i class="pdf">PDF</i><span>[예시중학교-4988] (본문) 진로교육 담당자 연수 안내.pdf</span></div>
+            </div>
+            <span class="arrow" style="transform:rotate(90deg)">→</span>
+            <div class="grouped">
+              <div class="row1"><b style="color:var(--cat-submit)">D-3</b><span>신청·공모</span></div>
+              해외 파견교사 선발 계획 알림 <span class="chip">첨부 1</span>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step" id="step5">
+        <div class="step-text rv">
+          <span class="step-no">5</span>
+          <h3>작은 창 읽기</h3>
+          <p>화면 오른쪽 위에 작은 창이 뜹니다. <strong>기한이 가까운 공문부터</strong> 위에서 아래로 늘어섭니다.</p>
+          <ul>
+            <li><strong>D-4</strong>는 나흘 남았다는 뜻입니다. 사흘 이하로 남으면 빨갛게 보입니다.</li>
+            <li>왼쪽 <strong>색 띠</strong>가 업무 종류입니다.</li>
+            <li>공문을 누르면 브라우저에 <strong>전체 화면</strong>이 열립니다.</li>
+            <li>제목 옆 빈자리를 잡고 끌면 원하는 곳으로 옮겨집니다.</li>
+          </ul>
+          <div class="cats">
+            <span class="cat"><i class="c-submit"></i><span><b>제출·보고</b><small>자료를 만들어 보내야 하는 것</small></span></span>
+            <span class="cat"><i class="c-event"></i><span><b>일정·행사</b><small>참석하거나 실시하는 것</small></span></span>
+            <span class="cat"><i class="c-apply"></i><span><b>신청·공모</b><small>할지 말지 고르는 것</small></span></span>
+            <span class="cat"><i class="c-distribute"></i><span><b>배포·전달</b><small>학생·학부모에게 줄 것</small></span></span>
+            <span class="cat"><i class="c-notice"></i><span><b>안내·참고</b><small>읽고 알면 되는 것</small></span></span>
+          </div>
+        </div>
+        <div class="stage beige rv" aria-label="위젯의 각 부분 설명 그림">
+          <span class="stage-cap">위젯 둘러보기</span>
+          <div class="anatomy">
+            <div class="gw" aria-hidden="true">
+              <div class="gw-head">
+                <span class="gw-title">공문 정리함</span>
+                <span class="gw-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="2" width="8" height="9" fill="currentColor"/><rect x="3" y="5" width="8" height="9" fill="#DDE1DC"/></svg></span>
+                <span class="gw-ico"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="6" height="8" fill="#3C5A46"/><rect x="8" y="4" width="6" height="8" fill="#A6301F"/></svg></span>
+                <span class="gw-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="10" height="11" rx="1"/><rect x="6" y="1.5" width="4" height="3" rx=".6" fill="#DDE1DC"/></svg></span>
+                <span class="gw-ico"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="3.5" r="1.3"/><circle cx="8" cy="3.5" r="1.3"/><circle cx="12.5" cy="3.5" r="1.3"/><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/><circle cx="3.5" cy="12.5" r="1.3"/><circle cx="8" cy="12.5" r="1.3"/><circle cx="12.5" cy="12.5" r="1.3"/></svg></span>
+                <span class="gw-ico">—</span>
+                <span class="gw-ico">✕</span>
+              </div>
+              <div class="gw-opt">투명도 <span class="gw-slider"></span><span class="gw-folder">…\문서\공문</span></div>
+              <div class="gw-sum">처리할 것 3건</div>
+              <div class="gw-rows">
+                <div class="gw-row"><i class="gw-bar c-submit"></i><div class="gw-in"><div class="gw-top"><span class="gw-dd t-submit">D-1</span><span>제출·보고</span></div><div class="gw-name">2026 학교폭력 실태조사 결과 제출</div></div></div>
+                <div class="gw-row"><i class="gw-bar c-event"></i><div class="gw-in"><div class="gw-top"><span class="gw-dd t-event">D-6</span><span>일정·행사</span></div><div class="gw-name">진로교육 담당자 연수 안내</div></div></div>
+                <div class="gw-row"><i class="gw-bar c-notice"></i><div class="gw-in"><div class="gw-top"><span class="gw-dd t-soft">—</span><span>안내·참고</span></div><div class="gw-name">개인정보 보호 수칙 안내</div></div></div>
+              </div>
+              <div class="gw-foot"><span class="gw-btn">자세히 보기</span><span class="gw-btn">다시 훑기</span><span class="gw-stamp">09:40</span></div>
+              <span class="mark" style="left:156px; top:-30px">1</span>
+              <span class="mark" style="left:182px; top:-30px">2</span>
+              <span class="mark" style="left:208px; top:-30px">3</span>
+              <span class="mark" style="left:234px; top:-30px">4</span>
+              <span class="mark" style="left:272px; top:-30px">5</span>
+              <span class="mark" style="left:-30px; top:36px">6</span>
+              <span class="mark" style="right:-30px; top:36px">7</span>
+              <span class="mark" style="left:-30px; top:98px">8</span>
+            </div>
+            <ol class="legend">
+              <li><span class="mk">1</span><span><b>항상 위에 두기</b> — 다른 창에 가리지 않게</span></li>
+              <li><span class="mk">2</span><span><b>결재 전후 비교</b> 서랍 열기</span></li>
+              <li><span class="mk">3</span><span><b>커스텀 클립보드</b> 서랍 열기</span></li>
+              <li><span class="mk">4</span><span><b>도구 서랍</b> 열기</span></li>
+              <li><span class="mk">5</span><span><b>접기(—)·닫기(✕)</b></span></li>
+              <li><span class="mk">6</span><span><b>투명도</b> — 끌면 창이 흐려지고 진해짐</span></li>
+              <li><span class="mk">7</span><span><b>읽는 폴더</b> — 누르면 열기·바꾸기</span></li>
+              <li><span class="mk">8</span><span><b>남은 날과 업무 색</b> — 누르면 전체 화면</span></li>
+            </ol>
+          </div>
+        </div>
+      </article>
+
+      <article class="step" id="step6">
+        <div class="step-text rv">
+          <span class="step-no">6</span>
+          <h3>전체 화면에서 확인하고 처리하기</h3>
+          <p>전체 화면에서 본문과 첨부를 <strong>문서 모양 그대로</strong> 미리 봅니다.</p>
+          <ul>
+            <li>기한이나 업무 종류가 틀렸으면 바로 고칩니다. <strong>고친 값이 항상 우선</strong>합니다.</li>
+            <li>기한이 비어 있으면 <strong>본문에 나온 날짜</strong>를 한 번 누르세요. 그 날짜가 기한이 됩니다.</li>
+            <li>다 한 공문은 <strong>처리 완료</strong>를 누릅니다. 목록 왼쪽 네모로 여러 건을 한꺼번에 고를 수 있고, 잘못 눌렀으면 <strong>Ctrl+Z</strong>로 되돌립니다.</li>
+          </ul>
+          <div class="tip"><b>일정 내보내기</b><span>달력 파일(.ics)을 만들어 구글 캘린더 등에 불러올 수 있습니다.</span></div>
+        </div>
+        <div class="stage rv" aria-label="전체 화면에서 날짜를 눌러 기한을 정하고 처리 완료를 누르는 그림">
+          <span class="stage-cap">화면 예시</span>
+          <div class="browser">
+            <div class="b-bar"><i></i><i></i><i></i><span class="b-url">127.0.0.1 — 이 컴퓨터 안에서만 열립니다</span></div>
+            <div class="b-app">
+              <div class="b-left">
+                <div class="b-head"><b>공문 정리함</b><span class="b-tool">다시 훑기</span><span class="b-tool">폴더 정리</span><span class="b-tool">완료된 업무 정리</span></div>
+                <div class="b-item" style="border-left-color:var(--cat-submit)"><span class="box"></span><span class="dd" style="color:var(--cat-submit)">D-1</span><span>2026 학교폭력 실태조사 결과 제출</span></div>
+                <div class="b-item on" style="border-left-color:var(--cat-apply)"><span class="box"></span><span class="dd" style="color:var(--cat-submit)">D-3</span><span>해외 파견교사 선발 계획 알림</span></div>
+                <div class="b-item" style="border-left-color:var(--cat-event)"><span class="box"></span><span class="dd" style="color:var(--cat-event)">D-6</span><span>진로교육 담당자 연수 안내</span></div>
+                <div class="b-item" style="border-left-color:var(--cat-notice)"><span class="box"></span><span class="dd" style="color:var(--app-soft)">—</span><span>개인정보 보호 수칙 안내</span></div>
+              </div>
+              <div class="b-panel">
+                <h5>해외 파견교사 선발 계획 알림</h5>
+                <div class="fld"><label>업무 유형</label><div class="val">신청·공모</div></div>
+                <div class="fld"><label>기한</label><div class="val">2026-10-02</div></div>
+                <div class="fld"><label>본문에 나온 날짜 · 누르면 기한이 됩니다</label>
+                  <div class="dates"><span class="pick ring">10.02</span><span>10.16</span><span>11.03</span><span class="mark in" style="margin-left:2px">1</span></div>
+                </div>
+                <div><span class="done-btn ring">처리 완료</span><span class="mark in">2</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step" id="step7">
+        <div class="step-text rv">
+          <span class="step-no">7</span>
+          <h3>끝난 공문은 월별 폴더로</h3>
+          <p>처리 완료한 공문이 모이면 전체 화면 위쪽의 <strong>완료된 업무 정리</strong>를 누르세요. <strong>마감 날짜가 속한 달</strong>의 폴더로 옮겨 드립니다.</p>
+          <ul>
+            <li>9월 25일이 기한이면 → <strong>9월</strong> 폴더</li>
+            <li>기한 없이 행사일만 있으면 → 행사일의 달</li>
+            <li>둘 다 없는 안내 공문 → 접수한 달</li>
+          </ul>
+          <p>월별 폴더가 없으면 새로 만듭니다. 어디로 무엇이 옮겨질지 <strong>먼저 보여 주고 물어봅니다.</strong> 원본 파일은 지우지 않습니다.</p>
+        </div>
+        <div class="stage beige rv" aria-label="공문 폴더의 파일이 월별 폴더로 옮겨지는 그림">
+          <span class="stage-cap">폴더 전후</span>
+          <div class="trees">
+            <div class="tree">
+              <h6>정리 전</h6>
+              <ul>
+                <li class="dir">교무기획
+                  <ul>
+                    <li class="dir">공문
+                      <ul>
+                        <li class="doc">학교폭력 실태조사 결과 제출</li>
+                        <li class="doc">해외 파견교사 선발 계획</li>
+                        <li class="doc">진로교육 담당자 연수</li>
+                      </ul>
+                    </li>
+                    <li class="dir">9월</li>
+                  </ul>
+                </li>
+              </ul>
+            </div>
+            <span class="arrow">→</span>
+            <div class="tree">
+              <h6>정리 후</h6>
+              <ul>
+                <li class="dir">교무기획
+                  <ul>
+                    <li class="dir">공문
+                      <ul><li class="doc">진로교육 담당자 연수</li></ul>
+                    </li>
+                    <li class="dir">9월
+                      <ul><li class="doc moved">학교폭력 실태조사 결과 제출</li></ul>
+                    </li>
+                    <li class="dir">10월<span class="new-tag">새로</span>
+                      <ul><li class="doc moved">해외 파견교사 선발 계획</li></ul>
+                    </li>
+                  </ul>
+                </li>
+              </ul>
+            </div>
+            <div class="confirm">처리 완료한 공문 2건을 마감 월 폴더로 옮깁니다. <span class="ok">확인</span></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step" id="step8">
+        <div class="step-text rv">
+          <span class="step-no">8</span>
+          <h3>결재 전후 비교하기</h3>
+          <p>결재자가 말없이 고친 따옴표나 글자 하나를 찾아 줍니다.</p>
+          <ol>
+            <li>원본과 결재된 문서를 <strong>같은 확대 배율</strong>로 나란히 띄웁니다.</li>
+            <li>작은 창의 <strong>초록·빨강 사각형</strong> 아이콘 → <strong>비교 시작</strong>.</li>
+            <li>화면이 살짝 어두워지면 <strong>원본 쪽을 드래그</strong>합니다.</li>
+            <li>이어서 <strong>수정본 쪽을 드래그</strong>합니다.</li>
+          </ol>
+          <p>달라진 자리가 <strong style="color:#C02A1A">빨간 상자</strong>로 표시됩니다. 글자가 아니라 화면 모양을 견주므로 한글이든 PDF든 됩니다.</p>
+          <div class="tip"><b>안심</b><span>찍은 화면은 저장하지 않고, 창을 닫으면 사라집니다.</span></div>
+        </div>
+        <div class="stage rv" aria-label="원본과 수정본에서 달라진 글자에 빨간 상자가 표시된 그림">
+          <span class="stage-cap">화면 예시</span>
+          <div class="cmp">
+            <div class="paper">
+              <h6>① 원본</h6>
+              <p>1. 관련: OO교육청 진로교육과-1234</p>
+              <p>2. 위 호와 관련하여 진로교육 담당자 연수를 다음과 같이 안내합니다.</p>
+              <p>가. 일시: 2026. 10. 8.(목) 14:00</p>
+              <p>나. 장소: OO교육청 대회의실</p>
+              <span class="drag"></span>
+            </div>
+            <div class="paper">
+              <h6>② 결재된 문서</h6>
+              <p>1. 관련: OO교육청 진로교육과-1234<span class="diff">호</span></p>
+              <p>2. 위 호와 관련하여 <span class="diff">「</span>진로교육 담당자 연수<span class="diff">」</span>를 다음과 같이 안내합니다.</p>
+              <p>가. 일시: 2026. 10. 8.(목) 14:00</p>
+              <p>나. 장소: OO교육청 대회의실</p>
+              <span class="drag"></span>
+            </div>
+            <div class="cmp-steps"><span><b>1</b>서랍 열기</span><span><b>2</b>비교 시작</span><span><b>3</b>원본 드래그</span><span><b>4</b>수정본 드래그</span></div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+    <p class="note-ex">※ 이 페이지의 화면 그림은 이해를 돕기 위해 다시 그린 예시이며, 실제 화면과 세부 모양이 조금 다를 수 있습니다. 예시의 기관·공문은 가상입니다.</p>
+  </div>
+</section>
+
+<!-- 업무 도우미 -->
+<section class="helpers" id="helpers">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">업무 도우미</span>
+      <h2>작은 창의 <span class="wave">서랍</span> 세 개</h2>
+      <p class="lead">작은 창 제목 오른쪽 아이콘을 누르면 아래로 서랍이 열립니다. 다시 누르면 닫힙니다.</p>
+    </div>
+    <div class="help-grid">
+      <article class="help rv">
+        <h3>결재 전후 비교</h3>
+        <div class="mini"><div class="mini-cmp"><span>…-1234</span><b>→</b><span>…-1234<span class="diff">호</span></span></div></div>
+        <p>원본과 수정본 화면을 차례로 끌어 고르면 달라진 곳을 빨간 상자로 보여 줍니다. 줄이 하나 끼어들어 아래가 밀려도 따라갑니다.</p>
+      </article>
+      <article class="help rv">
+        <h3>커스텀 클립보드</h3>
+        <div class="mini">
+          <div class="keys"><span>○</span><span>※</span><span>℃</span><span>·</span><span>「」</span><span>▶</span></div>
+          <div class="saved"><div>붙임 1부. 끝. <small>▴ ▾ ✕</small></div><div>담당: 교무기획부 <small>▴ ▾ ✕</small></div></div>
+        </div>
+        <p>자주 쓰는 문구와 특수문자를 모아 두고, 누르면 바로 복사됩니다. 넣을 자리에서 <strong>Ctrl+V</strong>로 붙여 넣으세요.</p>
+      </article>
+      <article class="help rv">
+        <h3>도구 서랍</h3>
+        <div class="mini"><div class="tools"><div><b>🏫</b>에듀파인</div><div><b>📁</b>업무 폴더</div><div><b>📄</b>결재 서식</div></div></div>
+        <p>에듀파인, 자주 여는 업무 폴더, 서식 파일을 등록해 두고 한 번에 엽니다. <strong>편집 → ＋ 도구 추가</strong>로 늘립니다.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- 안전 -->
+<section id="safe">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">안전과 개인정보</span>
+      <h2>공문 내용은 <span class="wave">이 컴퓨터</span>에만 남습니다</h2>
+    </div>
+    <div class="safe-grid">
+      <div class="safe rv"><h3>밖으로 나가지 않습니다</h3><p>읽은 내용은 이 컴퓨터의 <code>.gongmun</code> 폴더에만 저장됩니다.</p></div>
+      <div class="safe rv"><h3>이 컴퓨터에서만 열립니다</h3><p>전체 화면은 127.0.0.1에서만 열려, 같은 망의 다른 컴퓨터가 접속할 수 없습니다.</p></div>
+      <div class="safe rv"><h3>인터넷은 업데이트 확인만</h3><p>GitHub에 새 버전이 있는지만 보고, 버전 번호 외에는 아무것도 보내지 않습니다.</p></div>
+      <div class="safe rv"><h3>원본을 지우지 않습니다</h3><p>똑같은 파일을 또 받은 경우에만 중복 파일을 휴지통으로 보내며, 되살릴 수 있습니다.</p></div>
+    </div>
+    <div class="limits rv">
+      <h3>이런 경우는 잘 안 됩니다</h3>
+      <ul>
+        <li>스캔한 PDF(글자가 아닌 그림)와 암호가 걸린 파일은 읽지 못합니다. 목록에는 뜨지만 <strong>미분류</strong>로 들어갑니다.</li>
+        <li>hwp 파일은 표 안의 글자가 빠질 수 있습니다. 한글에서 <strong>다른 이름으로 저장 → hwpx</strong>로 바꿔 두면 가장 정확합니다.</li>
+        <li>업무 종류와 기한은 문장 규칙으로 판단하므로 틀릴 수 있습니다. 근거가 약하면 <strong>확인 필요</strong> 표시가 붙고, 고친 값이 항상 우선합니다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 묻고 답하기 -->
+<section id="faq" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">묻고 답하기</span>
+      <h2>막히셨나요?</h2>
+    </div>
+    <div class="faq rv">
+      <details>
+        <summary>작은 창이 사라졌어요</summary>
+        <div class="ans"><p>바탕화면 보기를 누르거나 다른 창에 가리면 작은 창이 숨습니다. 이 창은 작업 표시줄에 뜨지 않습니다.</p><p>바탕화면이나 시작 메뉴의 <strong>공문 정리함</strong>을 한 번 더 누르세요. 두 개가 뜨는 것이 아니라 숨어 있던 창이 앞으로 나옵니다.</p></div>
+      </details>
+      <details>
+        <summary>새로 받은 공문이 목록에 안 보여요</summary>
+        <div class="ans"><p>10분마다 폴더를 다시 훑습니다. 바로 보고 싶으면 <strong>다시 훑기</strong>를 누르세요. 작은 창의 폴더 표시를 눌러, 공문을 저장한 폴더와 같은지도 확인해 주세요.</p></div>
+      </details>
+      <details>
+        <summary>기한이나 업무 종류가 틀렸어요</summary>
+        <div class="ans"><p>전체 화면에서 직접 고치면 고친 값이 항상 우선합니다. 기한이 비어 있으면 <strong>본문에 나온 날짜</strong>에서 맞는 날짜를 누르세요.</p></div>
+      </details>
+      <details>
+        <summary>업데이트는 어떻게 하나요?</summary>
+        <div class="ans"><p>따로 하실 일이 없습니다. 새 버전이 나오면 알려 주고, <strong>예</strong>를 누르면 알아서 받아서 바뀝니다. 바로 확인하려면 작은 창에서 마우스 오른쪽 버튼 → <strong>업데이트 확인</strong>.</p></div>
+      </details>
+      <details>
+        <summary>컴퓨터를 켤 때 자동으로 띄우고 싶어요</summary>
+        <div class="ans"><p><kbd>윈도우 키</kbd> + <kbd>R</kbd> → <strong>shell:startup</strong> 입력 → 열린 폴더에 바탕화면의 공문 정리함 아이콘을 마우스 오른쪽 버튼으로 끌어다 놓고 <strong>여기에 바로 가기 만들기</strong>. 끄려면 그 바로가기를 지우면 됩니다.</p></div>
+      </details>
+      <details>
+        <summary>지우려면 어떻게 하나요?</summary>
+        <div class="ans"><p>윈도우 설정 → 앱 → <strong>공문 정리함</strong>에서 지웁니다. 설정과 처리 기록도 지울지 한 번 묻는데, <strong>아니오</strong>(기본)를 누르면 다시 설치했을 때 이어서 쓸 수 있습니다. 어느 쪽이든 공문 파일은 지워지지 않습니다.</p></div>
+      </details>
+      <details>
+        <summary>설치하지 않고 쓸 수 있나요?</summary>
+        <div class="ans"><p>네. <strong>gongmun.exe</strong>를 바로 실행해도 똑같이 동작합니다. USB에 넣어 다녀도 됩니다.</p></div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- 마무리 -->
+<section class="final" style="padding-top:0">
+  <div class="wrap">
+    <div class="box rv">
+      <span class="ring-deco" aria-hidden="true"></span>
+      <div>
+        <h2>오늘 받은 공문부터<br>정리해 보세요.</h2>
+        <p>설치 파일 하나, 관리자 권한 없이 바로 시작합니다.</p>
+      </div>
+      <div class="cta">
+        <a class="btn btn-dark" href="https://github.com/techhyunseo2/gongmun/releases/latest/download/gongmun-setup.exe">설치 파일 받기</a>
+        <a class="btn btn-line" href="https://github.com/techhyunseo2/gongmun/releases/latest">모든 파일 보기</a>
+        <small>내려받기 경고가 뜨면 <a href="#step1">1단계</a>를 봐 주세요 · Windows 11 64bit에서 확인</small>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>공문 정리함 · MIT 라이선스</span>
+    <span>글꼴 Pretendard (<a href="fonts/Pretendard-OFL.txt">SIL Open Font License 1.1</a>) · <a href="https://github.com/techhyunseo2/gongmun">소스 보기</a></span>
+  </div>
+</footer>
+
+<script>
+  // 머리 줄 아래 선
+  const nav = document.getElementById("nav");
+  const onScroll = () => nav.classList.toggle("scrolled", window.scrollY > 8);
+  onScroll();
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  // 스크롤하면 하나씩 나타나기
+  const items = document.querySelectorAll(".rv");
+  if ("IntersectionObserver" in window) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+      });
+    }, { rootMargin: "0px 0px -8% 0px" });
+    items.forEach((el) => io.observe(el));
+  } else {
+    items.forEach((el) => el.classList.add("in"));
+  }
+</script>
+
+<script>
+  // 문구 고치기 도우미 — Alt 를 누른 채 글자를 클릭하면 index.html 의 몇 번째 줄인지 알려 준다.
+  // 내 컴퓨터(Live Server 등)에서 열었을 때만 켜진다. Firebase 에 올린 페이지에서는 아무것도 하지 않는다.
+  (() => {
+    if (!["localhost", "127.0.0.1"].includes(location.hostname)) return;
+
+    const tip = document.createElement("div");
+    tip.style.cssText = "position:fixed;z-index:9999;padding:8px 12px;border-radius:10px;background:#1E2428;color:#fff;" +
+      "font:600 13px/1.45 Pretendard,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.3);pointer-events:none;display:none;max-width:320px";
+    document.body.appendChild(tip);
+
+    let hovered = null;
+    const outline = (el) => {
+      if (hovered) hovered.style.outline = hovered.dataset.oldOutline || "";
+      hovered = el;
+      if (el) { el.dataset.oldOutline = el.style.outline; el.style.outline = "2px dashed #FF705D"; }
+    };
+    document.addEventListener("mouseover", (e) => { if (e.altKey) outline(e.target); });
+    document.addEventListener("keyup", (e) => { if (e.key === "Alt") outline(null); });
+
+    // 눈에 보이는 글자 조각(스크립트·스타일·이 도우미 안의 글자는 뺀다)
+    const textNodes = () => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => {
+          const p = n.parentElement;
+          if (!p || p.closest("script, style") || tip.contains(n) || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      const list = [];
+      while (walker.nextNode()) list.push(walker.currentNode);
+      return list;
+    };
+    const clean = (s) => s.replace(/\s+/g, " ").trim();
+
+    const show = (x, y, html) => {
+      tip.innerHTML = html;
+      tip.style.display = "block";
+      tip.style.left = Math.min(x + 12, innerWidth - 340) + "px";
+      tip.style.top = Math.min(y + 12, innerHeight - 80) + "px";
+      clearTimeout(show.t);
+      show.t = setTimeout(() => (tip.style.display = "none"), 4000);
+    };
+
+    document.addEventListener("click", async (e) => {
+      if (!e.altKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const all = textNodes();
+      const mine = all.find((n) => e.target.contains(n));
+      if (!mine) return show(e.clientX, e.clientY, "여기에는 글자가 없습니다. 글자 위를 눌러 주세요.");
+
+      // 원본에서 찾을 조각: 글자 조각의 앞부분 20자. &nbsp; 처럼 원본에 다르게 적히는
+      // 글자가 나오면 그 앞에서 자른다. 같은 조각이 여러 번 나오면 화면 순서로 몇 번째인지 맞춘다.
+      const head = (n) => clean(n.nodeValue.split(/[ &<>"]/)[0]).slice(0, 20);
+      const piece = head(mine);
+      if (!piece) return show(e.clientX, e.clientY, "이 글자는 찾기 어렵습니다. 바로 옆 글자를 눌러 주세요.");
+      const order = all.filter((n) => head(n) === piece || head(n).startsWith(piece)).indexOf(mine);
+
+      let source;
+      try {
+        source = await (await fetch(location.href.split("#")[0], { cache: "no-store" })).text();
+      } catch {
+        return show(e.clientX, e.clientY, "원본을 읽지 못했습니다.");
+      }
+      // 화면 글자는 늘 태그 바로 뒤(">")에서 시작하므로 ">조각" 으로 찾는다.
+      // <body> 앞(제목·공유 설명)과 주석·속성 안의 같은 말은 이렇게 걸러진다.
+      const flat = source.replace(/\s+/g, " ");
+      const start = flat.indexOf("<body");
+      const hits = [];
+      for (const needle of [">" + piece, "> " + piece]) {
+        for (let i = flat.indexOf(needle, start); i !== -1; i = flat.indexOf(needle, i + 1)) {
+          hits.push(i + needle.length - piece.length);
+        }
+      }
+      hits.sort((a, b) => a - b);
+      if (!hits.length) return show(e.clientX, e.clientY, `원본에서 찾지 못했습니다.<br>VS Code 에서 Ctrl+F 로 "${piece}" 를 찾아 보세요.`);
+      const at = hits[Math.max(0, Math.min(order, hits.length - 1))];
+
+      // 공백을 합치기 전 원본의 같은 자리를 찾아 줄 번호를 센다.
+      let raw = 0, seen = 0;
+      while (seen < at && raw < source.length) {
+        if (/\s/.test(source[raw])) { while (raw < source.length && /\s/.test(source[raw])) raw++; seen++; }
+        else { raw++; seen++; }
+      }
+      const line = source.slice(0, raw).split("\n").length;
+
+      try { await navigator.clipboard.writeText(String(line)); } catch {}
+      show(e.clientX, e.clientY, `index.html <b style="color:#8ED462">${line}번째 줄</b><br>` +
+        `<span style="opacity:.75">VS Code 에서 Ctrl+G → Ctrl+V → Enter</span>`);
+    }, true);
+  })();
+</script>
+</body>
+</html>

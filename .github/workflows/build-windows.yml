@@ -12,6 +12,8 @@ name: 윈도우 설치 파일 만들기
 on:
   push:
     branches: [main]
+    # 소개 사이트(site/)만 고친 커밋은 프로그램과 무관하니 빌드하지 않는다
+    paths-ignore: ["site/**"]
   workflow_dispatch:
 
 permissions:
