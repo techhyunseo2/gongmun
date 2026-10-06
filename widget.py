@@ -8,7 +8,8 @@
   python widget.py --folder "경로"   폴더를 지정한다
 
 머리말을 끌면 창이 움직이고, 위치는 다음 실행 때 그대로 복원된다.
-머리말 아이콘으로 항상 위·결재 전후 비교·커스텀 클립보드를 켜고, 바로
+머리말 아이콘으로 항상 위·결재 전후 비교·링크 모음·도구 서랍·커스텀
+클립보드를 켜고, 바로
 아래 슬라이더로 투명도를 맞춘다. 오른쪽 버튼에는 업데이트 확인만 남는다.
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import random
+import re
 import sys
 import threading
 import tkinter as tk
@@ -24,6 +26,7 @@ import webbrowser
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import font as tkfont
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -66,7 +69,17 @@ GLYPH_MAX = 40              # 고정해 둘 특수문자·문구 개수 상한
 # 담아 둔 글에서 글이 쓸 수 있는 폭. 서랍 여백(12씩)·테두리·안쪽
 # 여백(8+4)을 뺀 만큼이며, 여기서 다시 오른쪽 단추 폭을 뺀다.
 CLIP_TEXT_WIDTH = WIDTH - 12 * 2 - 2 - 12
+# 링크 한 줄에서 글이 쓸 수 있는 폭. 서랍 여백(12씩)·테두리·색 띠(4)·
+# 왼쪽 여백(8)을 뺀 만큼이며, 여기서 다시 오른쪽 ↗ 표시의 폭을 뺀다.
+LINK_TEXT_WIDTH = WIDTH - 12 * 2 - 2 - 4 - 8
 TOOL_MAX = 18              # 도구 서랍에 등록해 둘 프로그램·폴더·파일 개수 상한
+LINK_MAX = 12              # 링크 모음에 둘 사이트 개수 상한. 한 줄이 두 단이라 길어진다
+# 링크마다 고를 수 있는 색. 위젯의 다른 색과 어울리도록 채도를 낮췄다.
+# 이름은 고르는 메뉴에 그대로 뜬다. 여기 없는 색은 "직접 고르기" 로 정한다.
+LINK_COLORS = (("남색", "#3A5560"), ("파랑", "#2F6FA8"), ("초록", "#3C5A46"),
+               ("황토", "#8A6A1F"), ("주황", "#C0601A"), ("빨강", "#A6301F"),
+               ("보라", "#6B4C8A"), ("회색", "#7B8480"))
+LINK_DEFAULT = LINK_COLORS[0][1]
 
 # 결재 전후 비교 서랍의 안내 문구. 사용자가 그대로 정한 것 — 다듬지 말 것.
 COMPARE_NOTE = ("결재 창의 '이력보기' 탭에서 활용 가능하며 픽셀 단위로 결재 "
@@ -152,6 +165,10 @@ class Widget:
                                            self._toggle_tools,
                                            active=bool(self.config.get("tools_open", False)))
         self.btn_tools.pack(side="right", padx=(6, 0))
+        self.btn_links = self._icon_button(self._draw_links, "링크 모음",
+                                           self._toggle_links,
+                                           active=bool(self.config.get("links_open", False)))
+        self.btn_links.pack(side="right", padx=(6, 0))
         self.btn_compare = self._icon_button(self._draw_compare, "결재 전후 비교",
                                              self._toggle_compare,
                                              active=bool(self.config.get("compare_open", False)))
@@ -218,6 +235,11 @@ class Widget:
         # 커스텀 클립보드와 같은 방식으로 열고 닫는다(_render_drawers 가 관리).
         self.tools = tk.Frame(self.body, bg=PAPER)
         self._tools_open = bool(self.config.get("tools_open", False))
+
+        # 링크 모음 — 자주 가는 사이트를 별명·색·설명과 함께 늘어놓고, 누르면
+        # 브라우저로 바로 연다. 도구 서랍과 같은 방식으로 열고 닫는다.
+        self.links = tk.Frame(self.body, bg=PAPER)
+        self._links_open = bool(self.config.get("links_open", False))
 
         # 결재 전후 비교 — 안내 문구와, 누르면 비교가 시작되는 단추가 든 서랍.
         self.compare = tk.Frame(self.body, bg=PAPER)
@@ -289,6 +311,26 @@ class Widget:
             for col in range(3):
                 x, y = 2 + col * 6, 2 + r * 6
                 c.create_rectangle(x, y, x + 4, y + 4, fill=fill, width=0)
+
+    def _draw_links(self, c, on):
+        """안쪽이 트인 고리 두 개를 가운데 막대가 잇는 모양(⊂—⊃). 어디서나
+        '링크'를 뜻하는 그림이라 따로 배우지 않아도 알아본다.
+
+        비스듬한 사슬 고리는 이 크기에서 두 고리가 한 덩어리로 뭉개져
+        연필처럼 보였다. 가로로 눕히면 18px 에서도 고리가 갈라져 보인다.
+        """
+        c.delete("all")
+        line = SLATE if on else SOFT
+        w = 1.7
+        c.create_arc(1, 5, 9, 13, start=90, extent=180, style="arc",
+                     outline=line, width=w)                       # 왼쪽 고리
+        c.create_line(5, 5, 8, 5, fill=line, width=w)
+        c.create_line(5, 13, 8, 13, fill=line, width=w)
+        c.create_arc(9, 5, 17, 13, start=270, extent=180, style="arc",
+                     outline=line, width=w)                       # 오른쪽 고리
+        c.create_line(10, 5, 13, 5, fill=line, width=w)
+        c.create_line(10, 13, 13, 13, fill=line, width=w)
+        c.create_line(6, 9, 12, 9, fill=line, width=w)            # 잇는 막대
 
     def _draw_crop(self, c, on):
         """사진 편집 프로그램의 '자르기' 표시 — ㄱ자 두 개가 어긋나게 겹친 모양."""
@@ -409,14 +451,14 @@ class Widget:
     # ------------------------------------------------------- 커스텀 클립보드
 
     def _render_drawers(self):
-        """머리말 아래 세 서랍(커스텀 클립보드·도구·결재 비교)을 정해진
+        """머리말 아래 네 서랍(커스텀 클립보드·도구·링크·결재 비교)을 정해진
         순서로 다시 깐다.
 
         매번 전부 떼었다가 열린 것만 다시 붙인다. 그래야 위 서랍을 닫으면
         아래 서랍이 곧바로 그 자리로 올라오고, 닫힌 서랍의 빈 자리도 남지
         않는다.
         """
-        for drawer in (self.quick, self.tools, self.compare):
+        for drawer in (self.quick, self.tools, self.links, self.compare):
             drawer.pack_forget()
         if not self.collapsed:
             if self._quick_open:
@@ -425,11 +467,15 @@ class Widget:
             if self._tools_open:
                 self._build_tools()
                 self.tools.pack(fill="x")
+            if self._links_open:
+                self._build_links()
+                self.links.pack(fill="x")
             if self._compare_open:
                 self._build_compare()
                 self.compare.pack(fill="x")
         self._set_icon_active(self.btn_quick, self._quick_open)
         self._set_icon_active(self.btn_tools, self._tools_open)
+        self._set_icon_active(self.btn_links, self._links_open)
         self._set_icon_active(self.btn_compare, self._compare_open)
         self._fit_height()
 
@@ -881,6 +927,267 @@ class Widget:
         if chosen:
             entry.delete(0, "end")
             entry.insert(0, str(Path(chosen)))      # 폴더는 / 로 와서 \ 로 맞춘다
+
+    # ----------------------------------------------------------- 링크 모음
+
+    def _toggle_links(self):
+        self._links_open = not self._links_open
+        self.config["links_open"] = self._links_open
+        save_config(self.config)
+        self._render_drawers()
+
+    def _build_links(self):
+        box = self.links
+        for child in box.winfo_children():
+            child.destroy()
+        tk.Frame(box, bg=RULE, height=1).pack(fill="x", padx=8, pady=(2, 7))
+
+        head = tk.Frame(box, bg=PAPER)
+        head.pack(fill="x", padx=12)
+        tk.Label(head, text="링크 모음", font=self.f_small, bg=PAPER,
+                 fg=SOFT).pack(side="left")
+        self._foot_button(head, "편집",
+                          lambda e=None: self._edit_links()).pack(side="right")
+
+        # 손으로 고친 설정 파일에 망가진 줄이 섞여 있어도 서랍은 떠야 한다
+        links = [ln for ln in (self.config.get("links") or [])
+                 if isinstance(ln, dict) and normalize_url(ln.get("url"))]
+        if links:
+            rows = tk.Frame(box, bg=PAPER)
+            rows.pack(fill="x", padx=12, pady=(6, 10))
+            room = LINK_TEXT_WIDTH - self._link_arrow_width(rows)
+            for link in links:
+                self._link_row(rows, link, room)
+        else:
+            tk.Label(box, text="편집을 눌러 자주 가는 사이트를 등록해 두세요. 별명·색·"
+                               "설명을 붙일 수 있고, 누르면 브라우저로 바로 열립니다.",
+                     font=self.f_small, bg=PAPER, fg=SOFT, anchor="w",
+                     wraplength=290, justify="left").pack(fill="x", padx=12, pady=(0, 10))
+
+    def _link_row(self, parent, link, room):
+        """사이트 한 줄. 왼쪽 색 띠와 별명은 고른 색으로, 그 아래에 설명을 단다.
+        설명이 없으면 주소를 대신 적어 어디로 가는지 알게 한다."""
+        url = normalize_url(link.get("url"))
+        name = (link.get("name") or "").strip() or link_host(url)
+        note = " ".join(str(link.get("note") or "").split())
+        # 앞머리(https://)는 누구에게나 같아 자리만 먹는다
+        bare = url.split("://", 1)[-1].rstrip("/")
+        color = link_color(link.get("color"))
+
+        row = tk.Frame(parent, bg=CARD, cursor="hand2",
+                       highlightbackground=RULE, highlightthickness=1)
+        row.pack(fill="x", pady=2)
+        tk.Frame(row, bg=color, width=4).pack(side="left", fill="y")
+        # 오른쪽 표시부터 자리를 잡는다. 글을 먼저 붙이면 긴 별명이 밀어낸다.
+        arrow = tk.Label(row, text="↗", font=self.f_small, bg=CARD, fg=SOFT, padx=6)
+        arrow.pack(side="right")
+        text = tk.Frame(row, bg=CARD)
+        text.pack(side="left", fill="x", expand=True, padx=(8, 0), pady=4)
+
+        shown = _fit_text(name, self.f_row, room)
+        title = tk.Label(text, text=shown, font=self.f_row, bg=CARD, fg=color,
+                         anchor="w")
+        title.pack(fill="x")
+        sub = tk.Label(text, text=_fit_text(note or bare, self.f_small, room),
+                       font=self.f_small, bg=CARD, fg=SOFT, anchor="w")
+        sub.pack(fill="x")
+
+        full = f"{name} — {url}" + (f" · {note}" if note else "")
+        for w in (row, text, title, sub, arrow):
+            w.bind("<Button-1>", lambda e, u=url, r=row: self._open_link(u, r))
+            w.bind("<Enter>", lambda e, r=row, c=color: self._link_hi(r, c))
+            w.bind("<Leave>", lambda e, r=row: self._link_hi(r, None))
+            # 별명만으로는 어디로 가는지 모른다. 주소를 늘 함께 보여 준다.
+            self._peek(w, full, shown)
+
+    def _link_arrow_width(self, parent) -> int:
+        """줄 오른쪽 ↗ 표시의 폭. 글꼴과 화면 배율마다 달라 재 본다."""
+        gauge = tk.Label(parent, text="↗", font=self.f_small, padx=6)
+        width = gauge.winfo_reqwidth()
+        gauge.destroy()
+        return width
+
+    @staticmethod
+    def _link_hi(row, color):
+        try:
+            row.config(highlightbackground=color or RULE)
+        except tk.TclError:
+            pass
+
+    def _open_link(self, url: str, row=None):
+        """브라우저로 연다. 주소가 망가졌거나 열 브라우저가 없으면 테두리만
+        잠깐 붉힌다 — 창을 띄워 막을 일은 아니다."""
+        target = normalize_url(url)
+        ok = False
+        if target:
+            try:
+                ok = webbrowser.open(target)
+            except Exception:  # noqa: BLE001 — 브라우저 쪽 사정으로 위젯이 죽으면 안 된다
+                ok = False
+        if row is not None and not ok:
+            row.config(highlightbackground=SEAL)
+            row.after(1100, lambda: self._link_hi(row, None))
+
+    def _edit_links(self):
+        """사이트를 두 줄에 하나씩 — 색·별명·주소, 그 아래 설명. 위아래로
+        순서를 바꾼다. 줄 순서가 곧 링크 모음의 배치 순서다."""
+        win = tk.Toplevel(self.root)
+        win.title("링크 모음")
+        win.configure(bg=PAPER)
+        win.resizable(False, False)
+        win.transient(self.root)
+
+        frame = tk.Frame(win, bg=PAPER)
+        frame.pack(fill="both", expand=True, padx=18, pady=16)
+        tk.Label(frame,
+                 text="자주 가는 사이트의 주소를 등록하세요. 누르면 브라우저로 바로 열립니다.\n"
+                      "왼쪽 색 단추로 색을 바꿉니다. 별명을 비워 두면 사이트 이름이 뜹니다.\n"
+                      "줄 순서가 곧 링크 모음의 배치 순서입니다.",
+                 font=self.f_small, bg=PAPER, fg=SOFT, justify="left",
+                 wraplength=420).pack(fill="x", pady=(0, 10))
+
+        heads = tk.Frame(frame, bg=PAPER)
+        heads.pack(fill="x")
+        for text, width in (("색", 4), ("별명", 13), ("주소", 0)):
+            tk.Label(heads, text=text, font=self.f_small, bg=PAPER, fg=SOFT,
+                     width=width, anchor="w").pack(side="left")
+
+        rows = tk.Frame(frame, bg=PAPER)
+        rows.pack(fill="both")
+        self._link_rows = []
+
+        # 색 고르기 메뉴에 띄울 견본. 창이 살아 있는 동안만 들고 있는다.
+        swatches = {}
+        for _, value in LINK_COLORS:
+            image = tk.PhotoImage(master=win, width=14, height=14)
+            image.put(value, to=(0, 0, 14, 14))
+            swatches[value] = image
+        win._swatches = swatches
+
+        def relayout():
+            for rec in self._link_rows:
+                rec["frame"].pack_forget()
+            for rec in self._link_rows:
+                rec["frame"].pack(fill="x", pady=(2, 6))
+
+        def move(rec, delta):
+            i = self._link_rows.index(rec)
+            j = max(0, min(len(self._link_rows) - 1, i + delta))
+            if i != j:
+                self._link_rows.insert(j, self._link_rows.pop(i))
+                relayout()
+
+        def drop(rec):
+            rec["frame"].destroy()
+            self._link_rows.remove(rec)
+
+        def field(parent, width):
+            return tk.Entry(parent, width=width, font=self.f_small, bg=CARD, fg=INK,
+                            relief="flat", highlightthickness=1, highlightbackground=RULE)
+
+        def set_color(rec, value):
+            rec["color"] = link_color(value)
+            rec["chip"].config(bg=rec["color"])
+
+        def custom_color(rec):
+            from tkinter import colorchooser
+            got = colorchooser.askcolor(color=rec["color"], parent=win,
+                                        title="링크 색 고르기")
+            if got and got[1]:
+                set_color(rec, got[1])
+
+        def pick_color(rec):
+            menu = tk.Menu(win, tearoff=0)
+            for label, value in LINK_COLORS:
+                menu.add_command(label=f" {label}", image=swatches[value], compound="left",
+                                 command=lambda v=value: set_color(rec, v))
+            menu.add_separator()
+            menu.add_command(label="직접 고르기…", command=lambda: custom_color(rec))
+            chip = rec["chip"]
+            menu.tk_popup(chip.winfo_rootx(), chip.winfo_rooty() + chip.winfo_height())
+
+        def add_row(name="", url="", note="", color=""):
+            if len(self._link_rows) >= LINK_MAX:
+                return
+            # 색을 정하지 않은 새 줄은 견본을 돌아가며 받는다. 처음부터 모두
+            # 같은 색이면 따로 표시하는 뜻이 없다.
+            color = link_color(color or LINK_COLORS[len(self._link_rows) % len(LINK_COLORS)][1])
+            r = tk.Frame(rows, bg=PAPER)
+            top = tk.Frame(r, bg=PAPER)
+            top.pack(fill="x")
+            chip = tk.Label(top, text="", width=3, bg=color, cursor="hand2",
+                            highlightbackground=RULE, highlightthickness=1)
+            chip.pack(side="left", fill="y")
+            e_name, e_url = field(top, 13), field(top, 28)
+            e_name.insert(0, name)
+            e_url.insert(0, url)
+            e_name.pack(side="left", padx=(4, 0))
+            e_url.pack(side="left", padx=(4, 0))
+            rec = {"frame": r, "chip": chip, "color": color,
+                   "name": e_name, "url": e_url}
+            chip.bind("<Button-1>", lambda e, x=rec: pick_color(x))
+            self._foot_button(top, "▴", lambda e=None, x=rec: move(x, -1), padx=5).pack(side="left", padx=(4, 0))
+            self._foot_button(top, "▾", lambda e=None, x=rec: move(x, 1), padx=5).pack(side="left", padx=(2, 0))
+            self._foot_button(top, "✕", lambda e=None, x=rec: drop(x), padx=5).pack(side="left", padx=(2, 0))
+
+            under = tk.Frame(r, bg=PAPER)
+            under.pack(fill="x", pady=(3, 0))
+            tk.Label(under, text="설명", font=self.f_small, bg=PAPER, fg=SOFT,
+                     width=4, anchor="w").pack(side="left")
+            e_note = field(under, 0)
+            e_note.insert(0, note)
+            e_note.pack(side="left", fill="x", expand=True, padx=(4, 0))
+            rec["note"] = e_note
+            self._link_rows.append(rec)
+            relayout()
+            return rec
+
+        for link in (self.config.get("links") or []):
+            if isinstance(link, dict):
+                add_row(link.get("name", ""), link.get("url", ""),
+                        link.get("note", ""), link.get("color", ""))
+        if not self._link_rows:
+            add_row()
+
+        warn = tk.Label(frame, text="", font=self.f_small, bg=PAPER, fg=SEAL,
+                        anchor="w", wraplength=420, justify="left")
+        warn.pack(fill="x", pady=(6, 0))
+
+        def save():
+            picked, bad = [], None
+            for rec in self._link_rows:
+                raw = rec["url"].get().strip()
+                if not raw:                        # 주소를 비운 줄은 지운 것으로 본다
+                    continue
+                url = normalize_url(raw)
+                rec["url"].config(highlightbackground=RULE if url else SEAL)
+                if not url:
+                    bad = bad or rec
+                    continue
+                picked.append({"name": rec["name"].get().strip()[:24], "url": url,
+                               "note": " ".join(rec["note"].get().split())[:80],
+                               "color": rec["color"]})
+            if bad is not None:
+                warn.config(text="알아볼 수 없는 주소가 있습니다. 빨갛게 표시된 칸을 "
+                                 "고쳐 주세요. (예: www.neis.go.kr)")
+                bad["url"].focus_set()
+                return
+            self.config["links"] = picked[:LINK_MAX]
+            save_config(self.config)
+            win.destroy()
+            self._render_drawers()
+
+        buttons = tk.Frame(frame, bg=PAPER)
+        buttons.pack(fill="x", pady=(8, 0))
+        self._foot_button(buttons, "저장", lambda e=None: save()).pack(side="right")
+        self._foot_button(buttons, "취소",
+                          lambda e=None: win.destroy()).pack(side="right", padx=(0, 6))
+        self._foot_button(buttons, "＋ 링크 추가",
+                          lambda e=None: add_row()).pack(side="left")
+
+        win.update_idletasks()
+        win.geometry(f"+{self.root.winfo_x() - 60}+{self.root.winfo_y() + 60}")
+        win.grab_set()
 
     # ------------------------------------------------------- 결재 전후 비교
 
@@ -1703,6 +2010,52 @@ def clamp_opacity(value) -> float:
     except (TypeError, ValueError):
         return 1.0
     return max(OPACITY_MIN, min(1.0, number))
+
+
+def normalize_url(text) -> str:
+    """링크 모음에 적은 주소를 브라우저에 넘길 꼴로 다듬는다. 알아볼 수
+    없으면 "" 이다.
+
+    naver.com 처럼 앞머리를 빼고 적는 일이 흔해 https:// 를 붙여 준다.
+    http·https 만 받는다. 링크 모음은 웹 사이트를 여는 자리이고, file: 이나
+    javascript: 같은 것은 누르는 순간 무엇을 할지 알 수 없다. 프로그램이나
+    폴더를 열려면 도구 서랍을 쓴다.
+    """
+    url = str(text or "").strip().strip('"').strip()
+    if not url or any(ch.isspace() for ch in url):
+        return ""
+    if "://" not in url:
+        url = "https://" + url
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        parts.port                      # 포트 자리가 망가졌으면 여기서 ValueError
+    except ValueError:
+        return ""
+    if parts.scheme.lower() not in ("http", "https"):
+        return ""
+    # 점 없는 이름(javascript, abc)은 사이트 주소가 아니라 잘못 적은 것이다
+    if host != "localhost" and "." not in host.strip("."):
+        return ""
+    return url
+
+
+def link_host(url: str) -> str:
+    """주소에서 사이트 이름만. 별명이나 설명을 비워 둔 자리를 채운다."""
+    try:
+        host = urlsplit(url).hostname or ""
+    except ValueError:
+        host = ""
+    return host.removeprefix("www.") or url
+
+
+def link_color(value) -> str:
+    """#RRGGBB 꼴이 아니면 기본색. 설정 파일을 손으로 고쳐 이상한 값이
+    들어가도 tk 가 색 이름을 못 알아봐 서랍이 통째로 안 뜨는 일은 없게."""
+    text = str(value or "").strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", text):
+        return text.upper()
+    return LINK_DEFAULT
 
 
 def _widget_sort(doc: dict):

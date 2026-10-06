@@ -263,21 +263,107 @@ class ToolDrawer(unittest.TestCase):
         self.assertIn("self._icon_cache[key] = image", block)  # None 도 캐시
 
     def test_all_drawers_close_cleanly_and_reflow(self):
-        """세 서랍(클립보드·도구·결재 비교)이 같은 방식으로 열고 닫힌다.
+        """네 서랍(클립보드·도구·링크·결재 비교)이 같은 방식으로 열고 닫힌다.
         닫으면 하단부까지 사라지고, 하나를 닫으면 아래 것이 올라온다."""
         block = self._block("_render_drawers")
-        self.assertIn("self.quick, self.tools, self.compare", block)
+        self.assertIn("self.quick, self.tools, self.links, self.compare", block)
         self.assertIn("drawer.pack_forget()", block)
         # 매번 전부 뗐다가 열린 것만 순서대로 다시 붙인다
         self.assertLess(block.index("pack_forget"), block.index('self.quick.pack(fill="x")'))
         self.assertLess(block.index('self.quick.pack(fill="x")'),
                         block.index('self.tools.pack(fill="x")'))
         self.assertLess(block.index('self.tools.pack(fill="x")'),
+                        block.index('self.links.pack(fill="x")'))
+        self.assertLess(block.index('self.links.pack(fill="x")'),
                         block.index('self.compare.pack(fill="x")'))
         # 서랍을 미리 깔아 두지 않는다 (빈 자리가 남던 원인)
         build = self._block("_build")
-        for pre in ("self.tools.pack(", "self.compare.pack("):
+        for pre in ("self.tools.pack(", "self.links.pack(", "self.compare.pack("):
             self.assertNotIn(pre, build)
+
+
+class LinkDrawer(unittest.TestCase):
+    """링크 모음 — 자주 가는 사이트를 별명·색·설명과 함께 두고 눌러 연다."""
+
+    def setUp(self):
+        self.source = (ROOT / "widget.py").read_text(encoding="utf-8")
+
+    def _block(self, name):
+        block = self.source[self.source.index(f"def {name}"):]
+        return block[:block.index("\n    def ", 10)]
+
+    def test_header_icon_with_a_tip(self):
+        self.assertIn('self._draw_links, "링크 모음"', self.source)
+        self.assertIn('"links_open"', self.source)
+
+    def test_icon_is_two_open_rings_joined_by_a_bar(self):
+        """어디서나 링크를 뜻하는 ⊂—⊃ 그림. 켜지면 진해진다."""
+        block = self._block("_draw_links")
+        self.assertEqual(block.count('style="arc"'), 2)
+        self.assertIn("SLATE if on else SOFT", block)
+
+    def test_bare_domain_gets_https(self):
+        self.assertEqual(widget.normalize_url("naver.com"), "https://naver.com")
+        self.assertEqual(widget.normalize_url("  www.neis.go.kr/x?a=1 "),
+                         "https://www.neis.go.kr/x?a=1")
+        self.assertEqual(widget.normalize_url("http://school.busan.kr"),
+                         "http://school.busan.kr")
+        self.assertEqual(widget.normalize_url('"https://a.kr"'), "https://a.kr")
+
+    def test_only_web_addresses_are_accepted(self):
+        """누르는 순간 무슨 일이 날지 모르는 주소는 받지 않는다."""
+        for bad in ("", None, "javascript:alert(1)", "file:///C:/x.txt",
+                    "ftp://a.kr", "abc", "a b.com", "https://", "https://a.kr:99999"):
+            with self.subTest(bad=bad):
+                self.assertEqual(widget.normalize_url(bad), "")
+        self.assertEqual(widget.normalize_url("http://localhost:8080"),
+                         "http://localhost:8080")
+
+    def test_host_fills_a_blank_name(self):
+        self.assertEqual(widget.link_host("https://www.neis.go.kr/x"), "neis.go.kr")
+        self.assertEqual(widget.link_host("https://edu.busan.kr"), "edu.busan.kr")
+
+    def test_broken_color_falls_back(self):
+        """tk 가 못 알아보는 색이 들어가면 서랍이 통째로 안 뜬다."""
+        self.assertEqual(widget.link_color("#a6301f"), "#A6301F")
+        for bad in (None, "", "red", "#123", "#GGGGGG", 7):
+            with self.subTest(bad=bad):
+                self.assertEqual(widget.link_color(bad), widget.LINK_DEFAULT)
+        for _, value in widget.LINK_COLORS:
+            self.assertEqual(widget.link_color(value), value)
+
+    def test_name_color_and_note_are_persisted(self):
+        block = self._block("_edit_links")
+        self.assertIn("save_config(self.config)", block)
+        for field in ('"name"', '"url"', '"note"', '"color"'):
+            with self.subTest(field=field):
+                self.assertIn(field, block)
+        self.assertIn("picked[:LINK_MAX]", block)
+        self.assertIn("colorchooser", block, "견본 밖의 색도 고를 수 있어야 한다")
+
+    def test_order_can_be_reordered(self):
+        block = self._block("_edit_links")
+        self.assertIn("self._link_rows.insert(j, self._link_rows.pop(i))", block)
+        self.assertIn("줄 순서가 곧 링크 모음의 배치 순서", self.source)
+
+    def test_a_bad_address_stops_the_save(self):
+        """잘못 적은 주소를 조용히 버리면 등록한 줄이 사라진 줄 안다."""
+        block = self._block("_edit_links")
+        self.assertIn("if bad is not None:", block)
+        self.assertLess(block.index("if bad is not None:"),
+                        block.index('self.config["links"] = picked'))
+
+    def test_clicking_opens_the_browser(self):
+        block = self._block("_open_link")
+        self.assertIn("webbrowser.open(target)", block)
+        self.assertIn("normalize_url(url)", block)
+
+    def test_row_buttons_are_packed_before_text(self):
+        """긴 별명이 오른쪽 ↗ 표시를 밀어내지 않게 표시부터 자리를 잡는다."""
+        block = self._block("_link_row")
+        self.assertLess(block.index('arrow.pack(side="right")'),
+                        block.index('text.pack(side="left"'))
+        self.assertIn("_fit_text(name, self.f_row, room)", block)
 
 
 class CompareDrawer(unittest.TestCase):
@@ -629,6 +715,7 @@ class PeekOnClippedText(unittest.TestCase):
         for spot in ("self._peek(cell, text, label)",          # 자주 쓰는 문자
                      "self._peek(label, text, shown)",         # 담아 둔 글
                      "self._peek(w, f\"{name} — {path}\"",      # 도구 타일
+                     "self._peek(w, full, shown)",             # 링크 모음
                      "self._peek(name, title, shown)",         # 공문 제목
                      "self._peek(c, str(self.folder)"):        # 폴더 줄
             with self.subTest(spot=spot):
