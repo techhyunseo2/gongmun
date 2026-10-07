@@ -1646,7 +1646,16 @@ class Widget:
 
         top = tk.Frame(inner, bg=CARD)
         top.pack(fill="x")
-        tk.Label(top, text=badge, font=self.f_dday, bg=CARD, fg=color, width=5, anchor="w").pack(side="left")
+        when = tk.Label(top, text=badge, font=self.f_dday, bg=CARD, fg=color, width=5, anchor="w")
+        when.pack(side="left")
+        if left is None and doc.get("event_date"):
+            # 기한이 아닌 날짜다. 숫자만으로는 무슨 날인지, 본문에 없으면
+            # 어디서 왔는지 알 수 없었다. 전체 화면과 같은 말로 알린다.
+            tip = "기한이 아니라 공문에 적힌 행사·일정 날짜입니다."
+            if doc.get("event_from"):
+                tip += f" 첨부 「{doc['event_from']}」에서 찾았습니다."
+            when.bind("<Enter>", lambda e, w=when, t=tip: self._tip_schedule(w, t))
+            when.bind("<Leave>", lambda e: self._tip_cancel())
         if doc.get("pinned"):
             tk.Label(top, text="고정", font=self.f_small, bg=CARD, fg=SEAL).pack(side="left")
         tk.Label(top, text=CATEGORIES[doc["category"]], font=self.f_small,

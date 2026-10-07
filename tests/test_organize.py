@@ -241,5 +241,54 @@ class DownloadedTwice(MixedFolder):
         self.assertFalse(organize.same_file_content(one, self.inbox / "없다.txt"))
 
 
+class EventDateOfAGroup(unittest.TestCase):
+    """기한이 없을 때 목록에 대신 뜨는 '일정' 날짜.
+
+    안내 공문의 기한을 일부러 지웠는데, 첨부 일정표의 날짜(11.02)가 본문에도
+    없는 숫자로 떠서 무슨 뜻인지 알 수 없었다.
+    """
+
+    @staticmethod
+    def _doc(id_, role, event=None, deadline=None, edited=0):
+        return {"id": id_, "filename": f"{id_}.hwpx", "role": role, "group_key": "학교-1",
+                "path": f"C:/x/{id_}.hwpx", "readable": True, "confidence": "보통",
+                "title": id_, "deadline": deadline, "deadline_context": "",
+                "deadline_edited": edited, "event_date": event, "all_dates": [],
+                "done": False, "pinned": False, "archived": ""}
+
+    def test_a_cleared_deadline_shows_no_date_at_all(self):
+        group = app.fold_groups([
+            self._doc("본문", organize.ROLE_BODY, event="2027-03-01", edited=1),
+            self._doc("붙임", "첨부", event="2026-11-02", deadline="2026-10-01"),
+        ])[0]
+        self.assertIsNone(group["deadline"])
+        self.assertIsNone(group["event_date"], "지운 기한이 일정 날짜로 되살아나면 안 된다")
+
+    def test_a_date_from_an_attachment_names_that_file(self):
+        group = app.fold_groups([
+            self._doc("본문", organize.ROLE_BODY, event="2027-03-01"),
+            self._doc("붙임", "첨부", event="2026-11-02"),
+        ])[0]
+        self.assertEqual(group["event_date"], "2026-11-02")
+        self.assertEqual(group["event_from"], "붙임.hwpx")
+
+    def test_a_date_from_the_body_needs_no_source(self):
+        group = app.fold_groups([
+            self._doc("본문", organize.ROLE_BODY, event="2026-11-02"),
+            self._doc("붙임", "첨부", event="2026-12-01"),
+        ])[0]
+        self.assertEqual(group["event_date"], "2026-11-02")
+        self.assertEqual(group["event_from"], "")
+
+    def test_a_kept_deadline_still_keeps_its_event_date(self):
+        """손으로 기한을 정해 둔 것은 그대로다 — 지운 경우만 날짜를 거둔다."""
+        group = app.fold_groups([
+            self._doc("본문", organize.ROLE_BODY, event="2026-11-02",
+                      deadline="2026-10-20", edited=1),
+        ])[0]
+        self.assertEqual(group["deadline"], "2026-10-20")
+        self.assertEqual(group["event_date"], "2026-11-02")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

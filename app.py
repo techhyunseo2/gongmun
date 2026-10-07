@@ -713,8 +713,20 @@ def fold_groups(docs: list[dict]) -> list[dict]:
                 if not entry.get("deadline_context"):
                     source = next(m for m in members if m["deadline"] == deadlines[0])
                     entry["deadline_context"] = source.get("deadline_context") or ""
-        events = sorted({m["event_date"] for m in members if m.get("event_date")})
-        entry["event_date"] = events[0] if events else None
+        # 기한을 손으로 지웠으면 '날짜를 두지 않겠다'는 뜻이다. 그때 첨부
+        # 일정표의 날짜를 대신 띄우면, 지운 기한이 모르는 숫자로 되살아난
+        # 것처럼 보였다(안내 공문에 첨부 일정표의 11.02 가 떴다).
+        if edited and not edited.get("deadline"):
+            entry["event_date"], entry["event_from"] = None, ""
+        else:
+            events = sorted({m["event_date"] for m in members if m.get("event_date")})
+            entry["event_date"] = events[0] if events else None
+            # 그 날짜를 어느 파일에서 찾았는지. 본문에 없는 날짜가 뜨면 왜
+            # 그런지 알 길이 없어서, 첨부에서 왔으면 그 파일 이름을 알린다.
+            entry["event_from"] = ""
+            if events and lead.get("event_date") != events[0]:
+                source = next(m for m in members if m.get("event_date") == events[0])
+                entry["event_from"] = source["filename"]
         entry["all_dates"] = sorted({d for m in members for d in (m.get("all_dates") or [])})
         entry["done"] = all(m["done"] for m in members)
         # 묶음 안의 어느 문서든 고정돼 있으면 묶음 전체를 고정으로 본다.
