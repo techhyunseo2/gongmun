@@ -5,6 +5,7 @@
   .hwp   한글 바이너리 — olefile 필요
   .pdf                 — pypdf 필요
   .docx                — 외부 라이브러리 없이 처리
+  .odt   개방형 문서   — 외부 라이브러리 없이 처리 (표는 한 행을 한 줄로)
   .txt / .md           — 그대로 읽음
 
 라이브러리가 없으면 그 형식만 건너뛰고 나머지는 정상 동작한다.
@@ -19,8 +20,10 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import hwpx_view
+import odt_view
 
-SUPPORTED = {".hwpx", ".hwp", ".pdf", ".docx", ".xlsx", ".xlsm", ".xls", ".txt", ".md"}
+SUPPORTED = {".hwpx", ".hwp", ".pdf", ".docx", ".odt", ".xlsx", ".xlsm", ".xls",
+             ".txt", ".md"}
 
 # HWP 문단 안에서 8개 WCHAR(16바이트)를 차지하는 제어 문자들
 _WIDE_CONTROLS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
@@ -36,7 +39,7 @@ def extract_text(path: str | Path) -> str:
 
 
 def extract_rich(path: str | Path) -> tuple[str, str]:
-    """(평문, 미리보기 html)을 돌려준다. html은 hwpx에서만 나온다."""
+    """(평문, 미리보기 html)을 돌려준다. html은 hwpx·odt·엑셀에서 나온다."""
     path = Path(path)
     suffix = path.suffix.lower()
     html = ""
@@ -51,6 +54,12 @@ def extract_rich(path: str | Path) -> tuple[str, str]:
         text = _from_pdf(path)
     elif suffix == ".docx":
         text = _from_docx(path)
+    elif suffix == ".odt":
+        text = _from_odt(path)
+        try:
+            html = odt_view.render(path)
+        except Exception:          # 서식을 못 그려도 글자 미리보기는 남는다
+            html = ""
     elif suffix in (".xlsx", ".xlsm", ".xls"):
         html, text = _from_excel(path)
     elif suffix in (".txt", ".md"):
@@ -309,6 +318,101 @@ def _from_docx(path: Path) -> str:
             out.append("\n")
         elif tag == "t" and element.text:
             out.append(element.text)
+    return "".join(out)
+
+
+# ---------------------------------------------------------------- odt
+
+# 한컴오피스·리브레오피스가 "ODF 텍스트" 로 저장한 문서. docx 처럼 zip 안의
+# XML(content.xml)이라 따로 깔 것 없이 읽힌다. 공공기관은 개방형 문서 형식을
+# 쓰라는 지침이 있어 공문 첨부로 종종 온다.
+_ODF_TEXT = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+_ODF_TABLE = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+_ODF_OFFICE = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+_ODF_DRAW = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+
+
+def _from_odt(path: Path) -> str:
+    with zipfile.ZipFile(path) as archive:
+        try:
+            xml = archive.read("content.xml")
+        except KeyError as exc:
+            raise ExtractError("ODT 안에 본문(content.xml)이 없습니다") from exc
+    root = ET.fromstring(xml)
+    body = root.find(f"{{{_ODF_OFFICE}}}body")
+    lines: list[str] = []
+    _odf_blocks(body if body is not None else root, lines)
+    return "\n".join(lines)
+
+
+def _odf_blocks(node, lines: list[str], layout: bool = False) -> None:
+    """문단·제목은 한 줄씩, 표는 한 행을 한 줄로("칸 | 칸") 늘어놓는다.
+
+    표를 칸마다 줄을 바꿔 펼치면 "제출 | 2026.10.1.(목)" 처럼 할 일과
+    날짜가 한 줄에 있어야 기한을 알아보는 규칙이 날짜를 놓친다. hwpx 를
+    읽을 때와 같은 모양으로 맞춘다.
+
+    layout 이면 칸을 띄어쓰기로만 잇는다. 글상자 속 표는 자료가 아니라
+    공문 머리·꼬리를 자리 잡는 틀이라, PDF 공문처럼 "제목 …", "시행
+    중등교육과-4416 (2024. 3. 13.)" 으로 읽혀야 제목과 시행·접수 줄을
+    알아본다. "|" 가 끼면 시행일을 제출 기한으로 잘못 집었다.
+    """
+    for child in node:
+        tag = child.tag
+        if tag in (f"{{{_ODF_TEXT}}}p", f"{{{_ODF_TEXT}}}h"):
+            lines.append(_odf_inline(child))
+        elif tag == f"{{{_ODF_TABLE}}}table-row":
+            cells = []
+            # 바로 아래 칸만 본다. iter 로 훑으면 칸 안에 든 표의 칸까지
+            # 딸려 와 같은 글이 두 번 찍힌다. 합쳐져 가려진 칸(covered)은 빈칸이다.
+            for cell in child.findall(f"{{{_ODF_TABLE}}}table-cell"):
+                inner: list[str] = []
+                _odf_blocks(cell, inner, layout)
+                cells.append(" ".join(part.strip() for part in inner if part.strip()))
+            if layout:
+                row = " ".join(cell for cell in cells if cell)
+            else:
+                # 서식이 남겨 둔 빈 칸이 수천 개씩 반복되는 일이 있다. 뒤쪽 빈 칸은 버린다
+                while cells and not cells[-1]:
+                    cells.pop()
+                row = " | ".join(cells)
+            if row:
+                lines.append(row)
+        elif tag == f"{{{_ODF_OFFICE}}}annotation":
+            continue                      # 검토 메모는 본문이 아니다
+        else:
+            _odf_blocks(child, lines, layout)   # 목록·구역·표 머리 등은 안으로 들어간다
+
+
+def _odf_inline(node) -> str:
+    """한 문단 안의 글자. 띄어쓰기 여러 칸(text:s)·탭·줄바꿈을 되살린다."""
+    out = [node.text or ""]
+    for child in node:
+        tag = child.tag
+        if tag == f"{{{_ODF_TEXT}}}s":
+            out.append(" " * int(child.get(f"{{{_ODF_TEXT}}}c", "1") or 1))
+        elif tag == f"{{{_ODF_TEXT}}}tab":
+            out.append("\t")
+        elif tag == f"{{{_ODF_TEXT}}}line-break":
+            out.append("\n")
+        elif tag in (f"{{{_ODF_OFFICE}}}annotation", f"{{{_ODF_TEXT}}}note-citation"):
+            pass                          # 메모, 각주 번호
+        elif tag.startswith(f"{{{_ODF_DRAW}}}") \
+                or child.find(f".//{{{_ODF_TEXT}}}p") is not None:
+            # 에듀파인이 내보낸 공문은 머리(수신·제목)와 꼬리(발신·시행)를
+            # 글상자 속 표로 문단 안에 끼워 둔다. 글자처럼 이어 붙이면
+            # "부산광역시교육청수신수신자 참조제목…" 처럼 한 덩어리가 되어
+            # 제목을 못 찾는다. 안쪽은 문단·표 단위로 줄을 나눠 읽는다.
+            inner: list[str] = []
+            # 글상자는 대개 글자 꾸밈(span) 속에 들어 있어, 아래 어딘가에
+            # 글상자가 있으면 틀로 본다.
+            boxed = tag.startswith(f"{{{_ODF_DRAW}}}") \
+                or child.find(f".//{{{_ODF_DRAW}}}text-box") is not None
+            _odf_blocks(child, inner, layout=boxed)
+            out.append("\n" + "\n".join(inner) + "\n")
+        else:
+            out.append(_odf_inline(child))
+        out.append(child.tail or "")
     return "".join(out)
 
 

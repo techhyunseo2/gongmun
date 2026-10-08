@@ -281,6 +281,24 @@
     background:var(--paper); display:block;
   }
   .pagenote{color:var(--ink-soft); font-size:11.5px; margin-top:6px; text-align:left}
+  /* ODT 서식 미리보기 — PDF 칸과 같은 자리·높이에 흰 종이를 얹는다.
+     쪽은 실제 크기로 그려 오고 fitPages 가 zoom 으로 칸 폭에 맞춘다. */
+  .odwrap{
+    height:440px; overflow:auto; border:1px solid var(--rule); border-radius:3px;
+    background:var(--paper); padding:10px; cursor:zoom-in;
+  }
+  .odwrap.actual{cursor:zoom-out}
+  .od-page{
+    background:#fff; color:#000; margin:0 auto; line-height:1.6;
+    box-shadow:0 1px 3px rgba(22,32,27,.18); word-break:keep-all; overflow-wrap:anywhere;
+  }
+  .od-page .od-p{margin:0}
+  .od-page .od-box{margin:0 auto}
+  .od-page .od-table{border-collapse:collapse; table-layout:fixed; margin:0 auto}
+  .od-page .od-table td{padding:2px 4px; vertical-align:top}
+  .od-page .od-img{max-width:100%; height:auto; vertical-align:middle}
+  .od-page .od-tab{display:inline-block; width:2em}
+  .od-page .hx-obj{color:var(--ink-soft); font-size:12px}
   /* 크게 보기 — 미리보기 그림을 누르면 화면 가운데에 띄운다.
      패널은 480px 인데 그림 원본은 724px 라, 패널 안에서 키우면 가로로
      밀어 가며 읽어야 한다. 겹침은 패널(11)보다 위, 알림(20)보다 아래. */
@@ -864,6 +882,21 @@ function row(doc){
   </button>`;
 }
 
+// ODT 미리보기 쪽을 칸 폭에 맞춰 통째로 줄인다. 글자만 줄이면 표와
+// 그림의 비율이 어긋나고 줄바꿈 자리도 실제 문서와 달라진다.
+// 쪽을 누르면 실제 크기와 칸 맞춤을 오간다 — 줄인 글씨가 작을 때.
+function fitPages(){
+  document.querySelectorAll(".odwrap .od-page").forEach(page => {
+    const wrap = page.parentElement;
+    const room = wrap.clientWidth - 20;                     // .odwrap 안쪽 여백
+    const width = Number(page.dataset.width) || 717;
+    const fit = Math.min(1, Math.max(0.3, room / width));
+    page.style.zoom = wrap.classList.contains("actual") ? 1 : fit;
+    if (!wrap.onclick) wrap.onclick = () => { wrap.classList.toggle("actual"); fitPages(); };
+  });
+}
+window.addEventListener("resize", fitPages);
+
 function dateLabel(iso){
   const [y, m, d] = iso.split("-").map(Number);
   const weekday = "일월화수목금토"[new Date(y, m - 1, d).getDay()];
@@ -909,6 +942,15 @@ function _preview(doc, label){
   const short = label && label.length > 34 ? label.slice(0, 33) + "…" : label;
   const heading = short ? `미리보기 — ${esc(short)}` : "본문 미리보기";
   const id = encodeURIComponent(doc.id);
+
+  // ODT 는 서버가 문서의 서식(정렬·글자 크기·표·그림)대로 실제 쪽 크기로
+  // 다시 그려 보낸다. PDF 처럼 흰 종이에 얹고 칸 폭에 맞춰 줄인다(fitPages).
+  if (name.endsWith(".odt") && (doc.body_html || "").includes("od-page") && !plainView){
+    return `<div class="field"><label><span>${heading}</span>
+      <button class="viewswitch" id="viewswitch">글자만 보기</button></label>
+      <div class="odwrap">${doc.body_html}</div>
+      <div class="pagenote">문서에 적힌 서식대로 다시 그린 모습입니다. 누르면 실제 크기로 봅니다. 쪽 나눔과 글꼴은 실제와 조금 다를 수 있습니다.</div></div>`;
+  }
 
   // PDF 는 브라우저에 딸린 뷰어가 전 쪽을 그대로 그린다. 우리가 글자를
   // 뽑아 늘어놓는 것보다 실제 문서에 가깝다.
@@ -1026,6 +1068,7 @@ async function openPanel(id, fileId){
     render(); openPanel(id);
   });
 
+  fitPages();
   const switcher = $("viewswitch");
   // 보고 있던 파일을 그대로 둔 채 보기 방식만 바꾼다. viewingFile 을 넘기지
   // 않으면 첨부를 보다가 토글했을 때 본문으로 튕겨 나간다.

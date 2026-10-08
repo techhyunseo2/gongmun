@@ -22,7 +22,7 @@ a = Analysis(
            ("assets/Pretendard-OFL.txt", "assets"),
            ("LICENSE", "."), ("THIRD-PARTY-NOTICES.txt", ".")],
     hiddenimports=["olefile", "pypdf", "openpyxl", "xlrd", "app", "store",
-                   "classify", "extract", "hwpx_view", "updater", "organize",
+                   "classify", "extract", "hwpx_view", "odt_view", "updater", "organize",
                    "changelog", "compare", "screen_compare",
                    "compare_window"],
     hookspath=[],

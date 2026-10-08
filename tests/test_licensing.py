@@ -144,7 +144,7 @@ class NoRealDocuments(unittest.TestCase):
     """
 
     DOCUMENTS = {
-        ".hwp", ".hwpx", ".pdf", ".doc", ".docx",
+        ".hwp", ".hwpx", ".pdf", ".doc", ".docx", ".odt",
         ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx",
     }
 
