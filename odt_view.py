@@ -14,7 +14,6 @@ PDF 는 쪽 모양이 정해진 파일이라 브라우저가 그대로 그리지
 
 from __future__ import annotations
 
-import base64
 import re
 import zipfile
 from pathlib import Path
@@ -41,8 +40,7 @@ def q(name: str) -> str:
 BASE_PT = 10.0              # 문서가 기본 글자 크기를 안 정해 두었을 때
 PAGE_PAD = 28               # 종이 여백(px). 실제 쪽 여백은 너무 넓어 줄인다
 MAX_REPEAT = 64             # 서식이 남긴 빈 칸·열 반복은 이만큼만 펼친다
-IMAGE_MAX = 600_000         # 그림 한 장을 미리보기에 넣는 상한(바이트)
-IMAGES_TOTAL = 2_000_000    # 한 문서에서 넣는 그림 합계 상한
+IMAGE_MAX = 5_000_000       # 미리보기로 내보낼 그림 한 장의 상한(바이트)
 _MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
          "gif": "image/gif", "bmp": "image/bmp"}
 _LENGTH = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*(cm|mm|in|pt|pc|px)\s*$")
@@ -152,7 +150,6 @@ class Renderer:
         self.archive = archive
         self.styles = styles
         self.base_pt = _pt(styles.defaults.get("paragraph", {}).get("font-size")) or BASE_PT
-        self.image_bytes = 0
 
     # ---- 글자 크기·꾸밈
     def _text_css(self, props: dict, inherited_pt: float | None = None) -> list[str]:
@@ -262,18 +259,16 @@ class Renderer:
         return '<span class="hx-obj">[개체]</span>'
 
     def image(self, href: str, width: float | None) -> str:
-        suffix = href.rsplit(".", 1)[-1].lower()
-        mime = _MIME.get(suffix)
-        try:
-            data = self.archive.read(href) if mime and not href.startswith(("/", "..")) else b""
-        except KeyError:
-            data = b""
-        if not data or len(data) > IMAGE_MAX or self.image_bytes + len(data) > IMAGES_TOTAL:
+        """그림은 html 에 넣지 않고 자리만 남긴다. 화면이 열 때 서버에서
+        받아 온다(/api/odt-image).
+
+        예전에는 base64 로 통째로 넣었는데, 로고 두 장만으로도 미리보기가
+        저장 상한을 넘어 중간에서 잘렸고, 잘린 표가 화면을 무너뜨렸다.
+        """
+        if not image_ok(self.archive, href):
             return '<span class="hx-obj">[그림]</span>'
-        self.image_bytes += len(data)
         size = f' style="width:{_num(width)}px"' if width else ""
-        return (f'<img class="od-img"{size} alt="" '
-                f'src="data:{mime};base64,{base64.b64encode(data).decode("ascii")}">')
+        return f'<img class="od-img"{size} alt="" data-odt-image="{esc(href)}">'
 
     def table(self, node) -> str:
         table_props = self.styles.get("table", node.get(q("table:style-name")))
@@ -363,6 +358,27 @@ def _repeat(value: str | None) -> int:
 def _pt(value: str | None) -> float | None:
     length = px(value)
     return length * 72 / 96 if length else None
+
+
+# ------------------------------------------------------------------ 그림
+
+def image_ok(archive: zipfile.ZipFile, href: str) -> bool:
+    """미리보기에 내보내도 되는 그림인가. 문서 안의 그림 파일만, 브라우저가
+    그릴 수 있는 형식만, 너무 크지 않은 것만."""
+    if href.startswith(("/", "..")) or _MIME.get(href.rsplit(".", 1)[-1].lower()) is None:
+        return False
+    try:
+        return 0 < archive.getinfo(href).file_size <= IMAGE_MAX
+    except KeyError:
+        return False
+
+
+def read_image(path: str | Path, href: str) -> tuple[bytes, str] | None:
+    """ODT 안의 그림 한 장과 그 형식. 내보낼 수 없는 것이면 None."""
+    with zipfile.ZipFile(path) as archive:
+        if not image_ok(archive, href):
+            return None
+        return archive.read(href), _MIME[href.rsplit(".", 1)[-1].lower()]
 
 
 # ------------------------------------------------------------------ 입구

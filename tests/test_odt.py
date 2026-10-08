@@ -213,12 +213,15 @@ class OdtPreview(unittest.TestCase):
         self.assertNotIn("url(", html, "색으로 확인되지 않은 값은 버린다")
         self.assertIn("color:#FF0000", html)
 
-    def test_pictures_are_embedded_and_paths_cannot_escape(self):
-        png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    def test_pictures_are_referenced_not_embedded(self):
+        """로고를 base64 로 넣으면 html 이 저장 상한을 넘어 잘렸다(1.9.3)."""
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 300_000
         frame = ('<text:p><draw:frame svg:width="2cm"><draw:image xlink:href="{}"/>'
                  '</draw:frame></text:p>')
         html = self.html(frame.format("Pictures/logo.png"), {"Pictures/logo.png": png})
-        self.assertIn('src="data:image/png;base64,', html)
+        self.assertIn('data-odt-image="Pictures/logo.png"', html)
+        self.assertNotIn("base64", html)
+        self.assertLess(len(html), 2000, "그림 크기가 html 에 실리면 안 된다")
         self.assertIn("width:75.6px", html)               # 2cm
         for bad in ("../secret.png", "/etc/x.png", "Pictures/없음.png", "Pictures/x.wmf"):
             with self.subTest(href=bad):
@@ -227,6 +230,97 @@ class OdtPreview(unittest.TestCase):
     def test_blank_lines_keep_their_height(self):
         html = self.html('<text:p><text:span text:style-name="T1"></text:span></text:p>')
         self.assertIn("&nbsp;", html)
+
+
+class OdtImageAndStorage(unittest.TestCase):
+    """그림은 따로 받아 가고, 저장할 때 미리보기가 잘리지 않는다."""
+
+    PNG = b"\x89PNG\r\n\x1a\n" + b"1" * 200
+
+    def setUp(self):
+        import app
+        from store import Store
+        self.tmp = Path(tempfile.mkdtemp())
+        self.inbox = self.tmp / "공문"
+        self.inbox.mkdir()
+        self.store = Store(self.tmp / "t.db")
+        self.server, self.port = app.start_server(self.store, self.inbox,
+                                                  port=9963, base=self.tmp)
+
+    def tearDown(self):
+        import shutil
+        self.server.shutdown()
+        # 소켓까지 닫는다. 윈도우는 닫지 않은 자리에 다음 서버가 같은 번호로
+        # 또 붙을 수 있어, 요청이 죽은 쪽으로 가서 멈춘다.
+        self.server.server_close()
+        self.store.conn.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def raw(self, path: str):
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+        url = f"http://127.0.0.1:{self.port}{urllib.parse.quote(path, safe='/?=&')}"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                return response.status, response.headers.get("Content-Type"), response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.headers.get("Content-Type"), exc.read()
+
+    def _scan_one(self, name: str, body: str, pictures: dict | None = None) -> str:
+        _make_styled(self.tmp, body, pictures).rename(self.inbox / name)
+        self.store.scan(self.inbox)
+        return next(d["id"] for d in self.store.all_docs() if d["filename"] == name)
+
+    def _saved_html(self, doc_id: str) -> str:
+        return self.store.conn.execute("SELECT body_html FROM docs WHERE id=?",
+                                       (doc_id,)).fetchone()[0]
+
+    def test_the_picture_comes_from_inside_that_odt(self):
+        body = ('<text:p><draw:frame svg:width="2cm"><draw:image xlink:href="Pictures/a.png"/>'
+                '</draw:frame></text:p>')
+        doc_id = self._scan_one("로고.odt", body, {"Pictures/a.png": self.PNG})
+        status, kind, data = self.raw(f"/api/odt-image?id={doc_id}&name=Pictures/a.png")
+        self.assertEqual((status, kind, data), (200, "image/png", self.PNG))
+        for name in ("content.xml", "../a.png", "Pictures/없음.png"):
+            with self.subTest(name=name):
+                self.assertEqual(self.raw(f"/api/odt-image?id={doc_id}&name={name}")[0], 404)
+
+    def test_only_odt_records_hand_out_pictures(self):
+        (self.inbox / "그냥.txt").write_text("본문", encoding="utf-8")
+        self.store.scan(self.inbox)
+        doc_id = self.store.all_docs()[0]["id"]
+        self.assertEqual(self.raw(f"/api/odt-image?id={doc_id}&name=Pictures/a.png")[0], 404)
+        self.assertEqual(self.raw("/api/odt-image?id=없는아이디&name=Pictures/a.png")[0], 404)
+
+    def test_an_oversized_preview_is_dropped_not_cut(self):
+        """반쯤 잘린 html 은 닫히지 않은 표가 화면 단추까지 집어삼킨다."""
+        import store
+        para = "<text:p>" + "가" * 400 + "</text:p>"
+        doc_id = self._scan_one("긴글.odt", para * (store.HTML_LIMIT // 300))
+        self.assertEqual(self._saved_html(doc_id), "",
+                         "상한을 넘으면 비우고 글자 미리보기로 물러나야 한다")
+        self.assertTrue(self.store.get(doc_id)["readable"])
+
+    def test_a_preview_cut_by_the_old_version_is_read_again(self):
+        """1.9.3 이 잘라 담아 둔 미리보기는 파일이 그대로여도 다시 읽는다."""
+        import store
+        doc_id = self._scan_one("공문.odt", GONGMUN)
+        cut = ("<div><table>" + "x" * store.HTML_LIMIT)[:store.HTML_LIMIT]
+        self.store.conn.execute("UPDATE docs SET body_html=?, done=1 WHERE id=?",
+                                (cut, doc_id))
+        self.store.conn.commit()
+
+        self.store.scan(self.inbox)
+
+        saved = self._saved_html(doc_id)
+        self.assertTrue(saved.startswith('<div class="od-page"'))
+        self.assertTrue(saved.endswith("</div>"))
+        self.assertTrue(self.store.get(doc_id)["done"], "다시 읽어도 처리 표시는 그대로")
+
+        before = self.store.rev
+        self.store.scan(self.inbox)
+        self.assertEqual(self.store.rev, before, "고친 뒤에는 다시 읽지 않는다")
 
 
 class JudgingAnOdtGongmun(unittest.TestCase):

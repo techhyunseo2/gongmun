@@ -893,6 +893,10 @@ function fitPages(){
     const fit = Math.min(1, Math.max(0.3, room / width));
     page.style.zoom = wrap.classList.contains("actual") ? 1 : fit;
     if (!wrap.onclick) wrap.onclick = () => { wrap.classList.toggle("actual"); fitPages(); };
+    // 그림은 자리만 와 있다. 이 문서의 것을 서버에서 받아 채운다.
+    page.querySelectorAll("img[data-odt-image]:not([src])").forEach(img => {
+      img.src = `/api/odt-image?id=${wrap.dataset.doc}&name=${encodeURIComponent(img.dataset.odtImage)}`;
+    });
   });
 }
 window.addEventListener("resize", fitPages);
@@ -948,7 +952,7 @@ function _preview(doc, label){
   if (name.endsWith(".odt") && (doc.body_html || "").includes("od-page") && !plainView){
     return `<div class="field"><label><span>${heading}</span>
       <button class="viewswitch" id="viewswitch">글자만 보기</button></label>
-      <div class="odwrap">${doc.body_html}</div>
+      <div class="odwrap" data-doc="${id}">${doc.body_html}</div>
       <div class="pagenote">문서에 적힌 서식대로 다시 그린 모습입니다. 누르면 실제 크기로 봅니다. 쪽 나눔과 글꼴은 실제와 조금 다를 수 있습니다.</div></div>`;
   }
 

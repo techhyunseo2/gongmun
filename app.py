@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from classify import CATEGORIES, CATEGORY_ORDER, days_left  # noqa: E402
 from store import Store  # noqa: E402
 import extract  # noqa: E402
+import odt_view  # noqa: E402
 import organize  # noqa: E402
 
 def _base_dir() -> Path:
@@ -527,6 +528,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "읽지 못했습니다."}, 404)
             return self._send(200, data, "application/pdf",
                               {"Cache-Control": "private, max-age=604800"})
+
+        if route == "/api/odt-image":
+            # odt 서식 미리보기의 그림(로고 등). html 에 통째로 넣으면 저장
+            # 상한을 넘어 미리보기가 잘리므로, 화면이 열 때 따로 받아 간다.
+            # 우리 기록에 있는 odt 안의 그림만 — 아무 파일이나 읽어 가지 못하게.
+            doc = self.store.get(query.get("id", [""])[0])
+            if not doc or Path(doc["path"]).suffix.lower() != ".odt":
+                return self._json({"error": "찾을 수 없습니다."}, 404)
+            try:
+                found = odt_view.read_image(doc["path"], query.get("name", [""])[0])
+            except Exception:  # noqa: BLE001 — 파일이 사라졌거나 깨졌으면 그림만 빠진다
+                found = None
+            if not found:
+                return self._json({"error": "그림을 찾지 못했습니다."}, 404)
+            data, mime = found
+            return self._send(200, data, mime, {"Cache-Control": "private, max-age=604800"})
 
         if route == "/api/reveal":
             doc = self.store.get(query.get("id", [""])[0])

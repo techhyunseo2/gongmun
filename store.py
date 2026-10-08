@@ -26,6 +26,12 @@ from organize import ROLE_BODY, group_key, parse_name
 # 달라져서 이미 쌓인 처리 상태와 메모가 통째로 날아간다.
 COMPANION_HASH_BYTES = 4 * 1024 * 1024
 
+# 서식 미리보기(html)를 담아 두는 상한. 이보다 길면 자르지 않고 비운다.
+# 중간에서 자른 html 은 닫히지 않은 표가 화면의 다른 부분(안내 문구,
+# 처리 단추)까지 집어삼켜, 미리보기 칸이 통째로 무너졌다(1.9.3 의 odt).
+# 비워 두면 글자 미리보기로 대신 보인다.
+HTML_LIMIT = 120000
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs (
     id              TEXT PRIMARY KEY,
@@ -115,8 +121,14 @@ class Store:
     def _scan(self, folder: Path, force: bool = False) -> dict:
         added = skipped = failed = moved = 0
         # 경로까지 같이 들고 온다. 이름만 바뀐 파일을 알아보기 위해서다.
-        known = {row["id"]: row["path"]
-                 for row in self.conn.execute("SELECT id, path FROM docs")}
+        known: dict[str, str] = {}
+        # 예전 판이 상한에서 잘라 담아 둔 미리보기. 파일이 그대로라 평소엔
+        # 다시 읽지 않지만, 이것들은 망가진 채 남아 있으므로 한 번 더 읽는다.
+        cut: set[str] = set()
+        for row in self.conn.execute("SELECT id, path, length(body_html) AS n FROM docs"):
+            known[row["id"]] = row["path"]
+            if row["n"] == HTML_LIMIT:
+                cut.add(row["id"])
         seen: set[str] = set()
         # 이번 훑기에서 어떤 id 가 어느 자리를 차지했는지. 문서를 고쳐 저장하면
         # 내용이 달라져 id 도 새로 생기는데, 같은 자리의 옛 판을 지우지 않으면
@@ -141,7 +153,7 @@ class Store:
             doc_id = _file_id(path, None if readable else COMPANION_HASH_BYTES)
             seen.add(doc_id)
             taken[str(path)] = doc_id
-            if doc_id in known and not force:
+            if doc_id in known and not force and doc_id not in cut:
                 # 자리나 이름이 그대로면 아무것도 쓰지 않는다. 쓸데없이 써 두면
                 # 바뀐 게 없는데도 rev 가 올라 위젯이 헛되이 다시 그린다.
                 if known[doc_id] != str(path):
@@ -210,7 +222,8 @@ class Store:
                 result["category"], result["confidence"], result["deadline"],
                 result["deadline_context"], result["event_date"],
                 json.dumps(result["all_dates"], ensure_ascii=False),
-                result["summary"], body[:20000], body_html[:120000],
+                result["summary"], body[:20000],
+                body_html if len(body_html) <= HTML_LIMIT else "",
                 result.get("group_key", ""), result.get("role", ""),
                 result.get("receipt_number", ""), error, 1 if readable else 0,
             ),
