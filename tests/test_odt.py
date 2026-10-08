@@ -55,8 +55,8 @@ GONGMUN = (
     + _row("중학교", "교육지원청 학교지원과") + "</table:table>"
     + "<text:p>붙임 점검 서식 1부. 끝.</text:p>"
     + _boxed(_row("부산광역시교육감"),
-             _row("시행", "학교안전총괄과-14475", "(", "2024. 11. 19.", ")",
-                  "접수", "덕문중학교-7009", "(", "2024. 11. 19.", ")"))
+             _row("시행", "학교지원과-1234", "(", "2024. 11. 19.", ")",
+                  "접수", "예시중학교-7009", "(", "2024. 11. 19.", ")"))
 )
 
 
@@ -116,8 +116,8 @@ class ReadingOdt(unittest.TestCase):
     def test_boxed_header_and_footer_read_like_a_pdf(self):
         text = self.text(GONGMUN)
         self.assertIn("\n제목 (의무제출) 인증서 사용실태 점검 실시\n", text)
-        self.assertIn("시행 학교안전총괄과-14475 ( 2024. 11. 19. ) "
-                      "접수 덕문중학교-7009 ( 2024. 11. 19. )", text)
+        self.assertIn("시행 학교지원과-1234 ( 2024. 11. 19. ) "
+                      "접수 예시중학교-7009 ( 2024. 11. 19. )", text)
         self.assertNotIn("부산교육부산광역시교육청", text, "머리가 한 덩어리로 붙었다")
         self.assertIn("구분 | 제출처", text, "본문 표는 그대로 칸을 나눈다")
 
@@ -242,8 +242,8 @@ class JudgingAnOdtGongmun(unittest.TestCase):
         self.assertEqual(self.result["title"], "(의무제출) 인증서 사용실태 점검 실시")
 
     def test_numbers_for_grouping(self):
-        self.assertEqual(self.result["doc_number"], "학교안전총괄과-14475")
-        self.assertEqual(self.result["receipt_number"], "덕문중학교-7009")
+        self.assertEqual(self.result["doc_number"], "학교지원과-1234")
+        self.assertEqual(self.result["receipt_number"], "예시중학교-7009")
 
     def test_the_deadline_is_the_real_one_not_the_send_date(self):
         self.assertEqual(self.result["deadline"], "2024-12-03")
